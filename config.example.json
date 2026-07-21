@@ -1,0 +1,9 @@
+{
+  "AppKey": "YOUR_APP_KEY_HERE",
+  "AppSecret": "YOUR_APP_SECRET_HERE",
+  "ScheduledIntervalSeconds": 60,
+  "IdleIntervalSeconds": 300,
+  "NightIntervalSeconds": 1800,
+  "NightStartHour": 22,
+  "NightEndHour": 8
+}

@@ -1,0 +1,1 @@
+curl -X POST -d "grant_type=client_credentials&client_id=96c58c46-9efc-431b-a44e-c728d55f5868&client_secret=5018****************************ab3c"  https://api.authentication.husqvarnagroup.dev/v1/oauth2/token
