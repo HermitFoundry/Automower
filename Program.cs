@@ -773,10 +773,16 @@ async Task CommandSchedule(string[] scheduleArgs)
         return;
     }
 
+    var workAreaNames = (mower.Attributes.WorkAreas ?? [])
+        .Where(wa => !string.IsNullOrWhiteSpace(wa.Name))
+        .ToDictionary(wa => wa.WorkAreaId, wa => wa.Name.Trim());
+
     Console.WriteLine($"Schedule for {mowerName} (refreshed in schedule.json):");
     foreach (var t in tasks)
     {
-        var workAreaNote = t.WorkAreaId is not null ? $" [work area {t.WorkAreaId}]" : "";
+        var workAreaNote = t.WorkAreaId is { } waId
+            ? $" [{(workAreaNames.TryGetValue(waId, out var waName) ? waName : waId.ToString(CultureInfo.InvariantCulture))}]"
+            : "";
         Console.WriteLine($"  {FormatCalendarTask(t)}{workAreaNote}");
     }
 
