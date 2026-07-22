@@ -11,8 +11,29 @@ net10.0) that talks to the Husqvarna Automower Connect API. Run via `am.cmd
 <command> [args]` on Windows or `./am.sh <command> [args]` on Linux/macOS, or
 `dotnet run -- <command>` directly for quick one-offs. Also deployed to a
 Debian container on the user's QNAP TS-673A NAS for long-running `track`
-sessions; `migrate-to-dotfolders.sh` handles moving an older checkout's
-`bin/`-based config/data into `.config/`/`.data/`.
+sessions.
+
+**Repo layout**: the console app lives in `AutomowerConsole/` (its own
+subfolder), with `automower.slnx` (solution file) plus `am.cmd`/`am.sh` at
+the true repo root. Moved there specifically to fix a bare `dotnet build`
+failing with "more than one project or solution file" once `automower.slnx`
+appeared alongside the `.csproj` at the repo root. `migrate-to-dotfolders.sh`
+(which handled moving an even older checkout's `bin/`-based config/data into
+`.config/`/`.data/`) was deleted as no-longer-needed once this move happened.
+
+**`AutomowerConsole.Tests/`** (sibling folder, NUnit, referenced by
+`automower.slnx`) exists but is intentionally empty - scaffolded, no tests
+written yet (explicitly deferred by the user, twice: once when the
+`AutomowerConsole/` move was planned, once when the test project itself was
+created). `AutomowerConsole.csproj` has
+`<InternalsVisibleTo Include="AutomowerConsole.Tests" />` so tests can reach
+internal types (`Storage`, `AutomowerConnect`, etc. are all unmarked/default
+`internal`) without making anything public just for testability. Packages
+were bumped to latest via `dotnet outdated -u` right after scaffolding
+(NUnit 4.3.2→4.6.1, NUnit3TestAdapter 5.0.0→6.2.0, Microsoft.NET.Test.Sdk
+17.14.0→18.8.1, coverlet.collector 6.0.4→10.0.1, NUnit.Analyzers
+4.7.0→4.14.0, as of 2026-07-22) - re-run that whenever picking this back up
+if it's been a while, rather than assuming these stay current.
 
 **`am.cmd`/`am.sh` build once then launch `bin/Debug/net10.0/AutomowerConsole.dll`
 directly - deliberately not `dotnet run`.** Confirmed by direct incident on
@@ -29,11 +50,101 @@ casualty of the SIGKILL workaround was the graceful stop summary line.
 
 ## Project layout
 
-- `Program.cs` — CLI dispatch (top-level statements + local functions)
-- `HusqvarnaClient.cs` — auth + HTTP calls
-- `Models.cs` — JSON DTOs
-- `Storage.cs` — reads/writes `.config/config.json` and `.data/*.json(l)`
-- `ErrorCodes.cs` — full error code → description table
+Four-layer split: `Program.cs` (CLI dispatch + printing, plain eager locals
+for each service - see below) → four service classes (data-gathering/
+calculation, allowed to print their own intrinsic diagnostics) →
+`AutomowerConnect` (auth-handling facade, reached via a static singleton
+`AutomowerConnect.Instance`, never referenced by `Program.cs` at any
+distance) → `HusqvarnaClient` (raw HTTP). A dedicated output-formatting
+class (splitting the "printing" half out of `Program.cs`) is a known,
+explicitly deferred next step - not done yet.
+
+- `AutomowerConsole/Program.cs` — CLI dispatch (top-level statements + local
+  functions) + result formatting/printing; ~594 lines (was ~970 before the
+  service-layer work). Constructs `mowerService`/`mowerDetailService`/
+  `scheduleService`/`trackingService` as plain eager local variables right
+  after `command`/`rest` - **not** lazy `GetXService()` accessor methods
+  (an earlier pass had those; removed once construction became parameterless
+  and side-effect-free, since a "cache a value in a nullable field, expose
+  via a method" wrapper adds nothing once there's no laziness left to do -
+  see `AutomowerConnect.Instance` below for why they're still safe to
+  construct unconditionally on every run, including `help`/`config`)
+- `AutomowerConsole/MowerService.cs` — mower listing/caching/resolution
+  (`RefreshMowersAsync`, `EnsureMowersAsync`, `FindMower`,
+  `ResolveExplicitMowerAsync`, `ResolveMowerAsync`). Prints its own
+  ambiguous-match/not-found/fetching-from-API diagnostics — accepted by
+  design, since they're intrinsic to the resolution process itself, not a
+  separate presentation layer. `CommandList` was found duplicating
+  `RefreshMowersAsync`'s logic inline instead of calling it (a bug from the
+  pass that created the method - built it, never wired the one caller that
+  should have used it) - fixed as part of this pass, worth remembering as a
+  reminder to grep for a new method's expected call sites after adding it,
+  not just confirm it compiles
+- `AutomowerConsole/MowerDetailService.cs` — a specific, already-resolved
+  mower's live detail data: `GetMowerDetailAsync` (wraps `GetMowerAsync`;
+  used by `status`, `workareas`, `workarea`, `stayoutzones`, `schedule` -
+  five different commands projecting different slices of the same response),
+  `GetMowerRawAsync` (`status --all`), `GetMessagesAsync`, `GetWorkAreaDetailAsync`.
+  All one-line forwards to `AutomowerConnect.Instance` - added anyway per
+  explicit direction, since the point was architectural (no direct
+  `Program.cs` → `AutomowerConnect` reference at all, regardless of how thin
+  the wrapper is), not about extracting non-trivial logic
+- `AutomowerConsole/ScheduleService.cs` — calendar/schedule calculations +
+  `schedule.json` cache (`DayFlag`, `IsWithinSchedule`, `NextCalendarStart`,
+  `SaveScheduleForMower`, `GetCachedTasks`, `DetermineTrackingInterval`).
+  Pure calculation + `Storage`, no `AutomowerConnect` dependency. Calls the
+  pre-existing `DateTimeOffset.IsNighttime(...)` extension (`Extensions.cs`,
+  the user's own earlier edit, deliberately left as-is rather than absorbed)
+- `AutomowerConsole/TrackingService.cs` — reads/writes `track-<mower>.jsonl`:
+  `RunAsync` (the live poll loop, including its per-iteration progress
+  prints — same accepted-Console-output justification as `MowerService`;
+  resolves `AutomowerConnect.Instance` as a *local* inside the method body,
+  not a constructor-cached field, so constructing `TrackingService` itself
+  stays side-effect-free) and `SummarizeSessions` (log parsing + session
+  grouping, returns `List<TrackSession>` data — `Program.cs` still does that
+  command's line formatting, per "output stays in `Program.cs` for now").
+  Also owns `IsAtCharger` (static, used by both methods and by `Program.cs`'s
+  `CommandSessions` formatting)
+- `AutomowerConsole/AutomowerConnect.cs` — facade over `HusqvarnaClient`
+  owning the auth lifecycle (auto-authenticate on first use, retry once on
+  `HttpRequestException`). Reached exclusively via the static
+  `AutomowerConnect.Instance` (`_instance ??= Create()`, where `Create()`
+  calls `Storage.LoadConfig()`) - the four services above call this, `Program.cs`
+  never does, not even to construct it (that responsibility used to live in
+  `Program.cs`'s `GetConnect()`, deliberately moved). **Must stay lazy**:
+  `Storage.LoadConfig()` throws if `AppKey`/`AppSecret` aren't set yet, and
+  `help`/`config`/`errorcodes`/`current` must keep working with zero
+  `config.json` present - verified directly (temporarily renamed
+  `.config/config.json` away, confirmed `am help` still succeeds) rather
+  than just asserted. This is why none of the four services' constructors
+  may touch `AutomowerConnect.Instance` themselves, only method bodies that
+  actually make a call. Constructor kept `internal` (not `private`) rather
+  than folded away, so a future test can construct an independent instance
+  against test credentials without going through the shared singleton.
+- `AutomowerConsole/HusqvarnaClient.cs` — low-level auth + HTTP calls
+- `AutomowerConsole/Models.cs` — JSON DTOs
+- `AutomowerConsole/Storage.cs` — reads/writes `.config/config.json` and `.data/*.json(l)`
+- `AutomowerConsole/ErrorCodes.cs` — full error code → description table
+- `AutomowerConsole/Extensions.cs` — `DateTimeOffset.IsNighttime(...)`, a C#
+  14 extension member (the user's own edit, predates the service-layer work)
+
+**Testability note**: none of `MowerService`/`MowerDetailService`/
+`TrackingService` are currently unit-testable in isolation from the real
+network - `AutomowerConnect` has no interface and isn't virtual, so a fake
+can't be substituted regardless of whether it's constructor-injected or
+reached via `.Instance`. Moving to the static singleton didn't give up
+anything actually exercised; if isolated unit tests need this later, the
+follow-up is extracting an `IAutomowerConnect` interface, not reverting the
+singleton.
+
+**Known, deliberately deferred**: `CommandWorkArea`'s work-area matcher
+(index/exact-id/exact-name/unique-contains) is structurally identical to
+`MowerService.FindMower` (same shape, different type) - a good candidate to
+unify later, explicitly not done during the service-layer extraction since
+it wasn't asked for. `CommandConfig` (reflection-based `Key=Value` setter)
+was also left untouched - small and self-contained enough not to be part of
+"Program.cs is too big."
+
 - `.config/config.json` — app key/secret + `track` interval settings; gitignored,
   holds a live secret. `config.example.json` (repo root, tracked) is the
   placeholder template.
@@ -47,9 +158,16 @@ casualty of the SIGKILL workaround was the graceful stop summary line.
 
 **Both `.config/` and `.data/` are anchored to the repo root, not `bin/`.**
 `Storage.FindRepoRoot()` walks up from `AppContext.BaseDirectory` (which is
-`bin/<Config>/<TFM>/`) looking for the nearest `*.csproj`, falling back to
-`AppContext.BaseDirectory` itself if none is found (e.g. a bare publish
-without source alongside it). This exists specifically because `dotnet clean`
+`AutomowerConsole/bin/<Config>/<TFM>/`) looking for the nearest `*.slnx`,
+falling back to `AppContext.BaseDirectory` itself if none is found (e.g. a
+bare publish without source alongside it). It looks for `*.slnx` rather than
+`*.csproj` specifically because the `.csproj` now sits one level down in
+`AutomowerConsole/` - anchoring to it would land one level too shallow.
+There's only ever one `.slnx`, and it lives in the true repo root by
+construction (verified after the move: `.config/config.json`'s `AppKey`/
+`AppSecret` printed identical masked values before and after, proving the
+lookup landed on the exact same pre-existing files, not a fresh/relocated
+copy). This exists specifically because `dotnet clean`
 deletes everything MSBuild tracked as build output — verified empirically:
 before this fix, `config.json` lived in `bin/` via a `CopyToOutputDirectory`
 csproj item, and a `clean` silently deleted it, then the next build

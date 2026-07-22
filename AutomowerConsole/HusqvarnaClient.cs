@@ -1,33 +1,25 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
 
-class HusqvarnaClient
+namespace AutomowerConsole;
+
+internal class HusqvarnaClient(HttpClient http, string appKey, string appSecret)
 {
     private const string TokenUrl = "https://api.authentication.husqvarnagroup.dev/v1/oauth2/token";
     private const string ApiBaseUrl = "https://api.amc.husqvarna.dev/v1";
 
-    private readonly HttpClient _http;
-    private readonly string _appKey;
-    private readonly string _appSecret;
     private string? _accessToken;
-
-    public HusqvarnaClient(HttpClient http, string appKey, string appSecret)
-    {
-        _http = http;
-        _appKey = appKey;
-        _appSecret = appSecret;
-    }
 
     public async Task AuthenticateAsync()
     {
         var form = new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["grant_type"] = "client_credentials",
-            ["client_id"] = _appKey,
-            ["client_secret"] = _appSecret,
+            ["client_id"] = appKey,
+            ["client_secret"] = appSecret,
         });
 
-        var response = await _http.PostAsync(TokenUrl, form);
+        var response = await http.PostAsync(TokenUrl, form);
         var body = await response.Content.ReadAsStringAsync();
 
         if (!response.IsSuccessStatusCode)
@@ -37,7 +29,7 @@ class HusqvarnaClient
         }
 
         var token = JsonSerializer.Deserialize<TokenResponse>(body)
-            ?? throw new InvalidOperationException("Failed to parse token response");
+                    ?? throw new InvalidOperationException("Failed to parse token response");
 
         _accessToken = token.AccessToken;
     }
@@ -46,7 +38,7 @@ class HusqvarnaClient
     {
         var body = await SendAsync(HttpMethod.Get, $"{ApiBaseUrl}/mowers");
         var result = JsonSerializer.Deserialize<MowersResponse>(body)
-            ?? throw new InvalidOperationException("Failed to parse mowers response");
+                     ?? throw new InvalidOperationException("Failed to parse mowers response");
         return result.Data;
     }
 
@@ -54,7 +46,7 @@ class HusqvarnaClient
     {
         var body = await GetMowerRawAsync(mowerId);
         var result = JsonSerializer.Deserialize<MowerResponse>(body)
-            ?? throw new InvalidOperationException("Failed to parse mower response");
+                     ?? throw new InvalidOperationException("Failed to parse mower response");
         return result.Data;
     }
 
@@ -65,7 +57,7 @@ class HusqvarnaClient
     {
         var body = await SendAsync(HttpMethod.Get, $"{ApiBaseUrl}/mowers/{mowerId}/workAreas/{workAreaId}");
         var result = JsonSerializer.Deserialize<WorkAreaResponse>(body)
-            ?? throw new InvalidOperationException("Failed to parse work area response");
+                     ?? throw new InvalidOperationException("Failed to parse work area response");
         return result.Data.Attributes;
     }
 
@@ -73,7 +65,7 @@ class HusqvarnaClient
     {
         var body = await SendAsync(HttpMethod.Get, $"{ApiBaseUrl}/mowers/{mowerId}/messages");
         var result = JsonSerializer.Deserialize<MessagesResponse>(body)
-            ?? throw new InvalidOperationException("Failed to parse messages response");
+                     ?? throw new InvalidOperationException("Failed to parse messages response");
         return result.Data.Attributes.Messages;
     }
 
@@ -87,9 +79,9 @@ class HusqvarnaClient
         using var request = new HttpRequestMessage(method, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
         request.Headers.Add("Authorization-Provider", "husqvarna");
-        request.Headers.Add("X-Api-Key", _appKey);
+        request.Headers.Add("X-Api-Key", appKey);
 
-        var response = await _http.SendAsync(request);
+        var response = await http.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
 
         if (!response.IsSuccessStatusCode)

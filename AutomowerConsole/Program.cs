@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Reflection;
-using System.Text;
 using System.Text.Json;
+using AutomowerConsole;
 
 if (args.Length == 0)
 {
@@ -12,8 +12,16 @@ if (args.Length == 0)
 var command = args[0].ToLowerInvariant();
 var rest = args.Skip(1).ToArray();
 
-HusqvarnaClient? client = null;
 Config? cachedConfig = null;
+
+// Cheap to construct eagerly - none of these touch AutomowerConnect.Instance
+// (and therefore never read config.json) until a method body that actually
+// needs the API runs. help/config/errorcodes/current rely on that to keep
+// working with no config.json at all.
+var mowerService = new MowerService();
+var mowerDetailService = new MowerDetailService();
+var scheduleService = new ScheduleService();
+var trackingService = new TrackingService(scheduleService);
 
 switch (command)
 {
@@ -132,185 +140,20 @@ string MaskSecret(string value)
         ? "(not set)"
         : value.Length <= 8 ? new string('*', value.Length) : $"{value[..4]}...{value[^4..]}";
 
-HusqvarnaClient GetClient()
-{
-    if (client is null)
-    {
-        var config = GetConfig();
-        client = new HusqvarnaClient(new HttpClient(), config.AppKey, config.AppSecret);
-    }
-    return client;
-}
-
-void SaveScheduleForMower(string mowerId, string mowerName, CalendarTask[] tasks)
-{
-    var schedules = Storage.LoadSchedules();
-    schedules[mowerId] = new MowerSchedule(mowerName, DateTimeOffset.Now, tasks);
-    Storage.SaveSchedules(schedules);
-}
-
-CalendarTask[] GetCachedTasks(string mowerId)
-    => Storage.LoadSchedules().TryGetValue(mowerId, out var entry) ? entry.Tasks : [];
-
-bool DayFlag(CalendarTask t, DayOfWeek day) => day switch
-{
-    DayOfWeek.Monday => t.Monday,
-    DayOfWeek.Tuesday => t.Tuesday,
-    DayOfWeek.Wednesday => t.Wednesday,
-    DayOfWeek.Thursday => t.Thursday,
-    DayOfWeek.Friday => t.Friday,
-    DayOfWeek.Saturday => t.Saturday,
-    DayOfWeek.Sunday => t.Sunday,
-    _ => false,
-};
-
-// True if 'now' falls inside any calendar task's active window, including a
-// task from yesterday whose duration wraps past midnight into today.
-bool IsWithinSchedule(CalendarTask[] tasks, DateTimeOffset now)
-{
-    var minuteOfDay = now.Hour * 60 + now.Minute;
-    var yesterday = (DayOfWeek)(((int)now.DayOfWeek + 6) % 7);
-
-    foreach (var t in tasks)
-    {
-        if (DayFlag(t, now.DayOfWeek) && minuteOfDay >= t.Start && minuteOfDay < t.Start + t.Duration)
-        {
-            return true;
-        }
-
-        var wrapMinutes = t.Start + t.Duration - 1440;
-        if (wrapMinutes > 0 && DayFlag(t, yesterday) && minuteOfDay < wrapMinutes)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-// Earliest calendar task start strictly after 'after', scanning up to 8 days
-// forward (guarantees covering a full week even from late in the day today).
-// Returns null if there are no tasks at all.
-DateTimeOffset? NextCalendarStart(CalendarTask[] tasks, DateTimeOffset after)
-{
-    if (tasks.Length == 0) return null;
-
-    for (var dayOffset = 0; dayOffset <= 7; dayOffset++)
-    {
-        var day = after.Date.AddDays(dayOffset);
-        var dayOfWeek = day.DayOfWeek;
-        foreach (var t in tasks.OrderBy(t => t.Start))
-        {
-            if (!DayFlag(t, dayOfWeek)) continue;
-            var candidate = new DateTimeOffset(day, after.Offset).AddMinutes(t.Start);
-            if (candidate > after) return candidate;
-        }
-    }
-    return null;
-}
-
-// Nighttime window wraps past midnight when startHour > endHour (e.g. 22 -> 8).
-bool IsNighttime(DateTimeOffset now, int startHour, int endHour)
-    => startHour > endHour
-        ? now.Hour >= startHour || now.Hour < endHour
-        : now.Hour >= startHour && now.Hour < endHour;
-
-async Task<List<StoredMower>> EnsureMowersAsync()
-{
-    var mowers = Storage.LoadMowers();
-    if (mowers is null || mowers.Count == 0)
-    {
-        Console.WriteLine("No cached mower list found, fetching from API...");
-        var api = GetClient();
-        await api.AuthenticateAsync();
-        var fetched = await api.GetMowersAsync();
-        mowers = fetched
-            .Select(m => new StoredMower(m.Id, m.Attributes.System.Name, m.Attributes.System.Model, m.Attributes.System.SerialNumber))
-            .ToList();
-        Storage.SaveMowers(mowers);
-    }
-    return mowers;
-}
-
-// Matches by 1-based list index, exact id, exact name, or a unique
-// name-contains match. Returns candidates when the query is ambiguous.
-(StoredMower? Match, List<StoredMower> Candidates) FindMower(List<StoredMower> mowers, string query)
-{
-    if (int.TryParse(query, out var index) && index >= 1 && index <= mowers.Count)
-    {
-        return (mowers[index - 1], []);
-    }
-
-    var exact = mowers.FirstOrDefault(m => string.Equals(m.Id, query, StringComparison.OrdinalIgnoreCase))
-        ?? mowers.FirstOrDefault(m => string.Equals(m.Name, query, StringComparison.OrdinalIgnoreCase));
-    if (exact is not null)
-    {
-        return (exact, []);
-    }
-
-    var candidates = mowers.Where(m => m.Name.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
-    return candidates.Count == 1 ? (candidates[0], []) : (null, candidates);
-}
-
-// Resolves the mower to operate on: an explicit override query (name/id/index)
-// if given, otherwise the active mower from state.json. Prints its own error
-// and returns null when nothing can be resolved.
-async Task<(string Id, string Name)?> ResolveMowerAsync(string? overrideQuery)
-{
-    if (!string.IsNullOrWhiteSpace(overrideQuery))
-    {
-        var mowers = await EnsureMowersAsync();
-        var (match, candidates) = FindMower(mowers, overrideQuery);
-
-        if (match is not null)
-        {
-            return (match.Id, match.Name);
-        }
-
-        if (candidates.Count > 1)
-        {
-            Console.WriteLine($"Multiple mowers match '{overrideQuery}':");
-            foreach (var c in candidates)
-            {
-                Console.WriteLine($"  - {c.Name} (id: {c.Id})");
-            }
-        }
-        else
-        {
-            Console.WriteLine($"No mower found matching '{overrideQuery}'. Run 'list' to see available mowers.");
-        }
-        return null;
-    }
-
-    var state = Storage.LoadState();
-    if (state is null)
-    {
-        Console.WriteLine("No active mower set, and none specified. Use 'use <name|id|index>' first, or pass a mower name/id as an argument.");
-        return null;
-    }
-    return (state.ActiveMowerId, state.ActiveMowerName);
-}
-
 async Task CommandList()
 {
-    var api = GetClient();
-    await api.AuthenticateAsync();
-    var mowers = await api.GetMowersAsync();
+    var mowers = await mowerService.RefreshMowersAsync();
 
-    if (mowers.Length == 0)
+    if (mowers.Count == 0)
     {
         Console.WriteLine("No mowers found on this account.");
         return;
     }
 
-    var stored = mowers
-        .Select(m => new StoredMower(m.Id, m.Attributes.System.Name, m.Attributes.System.Model, m.Attributes.System.SerialNumber))
-        .ToList();
-    Storage.SaveMowers(stored);
-
-    Console.WriteLine($"Found {stored.Count} mower(s):");
-    for (var i = 0; i < stored.Count; i++)
+    Console.WriteLine($"Found {mowers.Count} mower(s):");
+    for (var i = 0; i < mowers.Count; i++)
     {
-        var m = stored[i];
+        var m = mowers[i];
         Console.WriteLine($"  [{i + 1}] {m.Name} (model: {m.Model}, serial: {m.SerialNumber}, id: {m.Id})");
     }
 }
@@ -324,25 +167,8 @@ async Task CommandUse(string[] queryArgs)
     }
     var query = string.Join(" ", queryArgs);
 
-    var mowers = await EnsureMowersAsync();
-    var (match, candidates) = FindMower(mowers, query);
-
-    if (match is null)
-    {
-        if (candidates.Count > 1)
-        {
-            Console.WriteLine($"Multiple mowers match '{query}':");
-            foreach (var c in candidates)
-            {
-                Console.WriteLine($"  - {c.Name} (id: {c.Id})");
-            }
-        }
-        else
-        {
-            Console.WriteLine($"No mower found matching '{query}'. Run 'list' to see available mowers.");
-        }
-        return;
-    }
+    var match = await mowerService.ResolveExplicitMowerAsync(query);
+    if (match is null) return;
 
     Storage.SaveState(new ActiveState(match.Id, match.Name));
     Console.WriteLine($"Active mower set to: {match.Name} (id: {match.Id})");
@@ -364,16 +190,13 @@ async Task CommandStatus(string[] statusArgs)
     var showAll = statusArgs.Any(a => a is "--all" or "-a");
     var mowerQuery = statusArgs.FirstOrDefault(a => a is not ("--all" or "-a"));
 
-    var resolved = await ResolveMowerAsync(mowerQuery);
+    var resolved = await mowerService.ResolveMowerAsync(mowerQuery);
     if (resolved is null) return;
     var (mowerId, mowerName) = resolved.Value;
 
-    var api = GetClient();
-    await api.AuthenticateAsync();
-
     if (showAll)
     {
-        var raw = await api.GetMowerRawAsync(mowerId);
+        var raw = await mowerDetailService.GetMowerRawAsync(mowerId);
         using var doc = JsonDocument.Parse(raw);
         var pretty = JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true });
         Console.WriteLine($"Full status for {mowerName}:");
@@ -381,7 +204,7 @@ async Task CommandStatus(string[] statusArgs)
         return;
     }
 
-    var mower = await api.GetMowerAsync(mowerId);
+    var mower = await mowerDetailService.GetMowerDetailAsync(mowerId);
     var a = mower.Attributes;
 
     var statusTime = DateTimeOffset.FromUnixTimeMilliseconds(a.Metadata.StatusTimestamp).ToLocalTime();
@@ -416,13 +239,11 @@ string InactiveReasonCaveat(string inactiveReason)
 
 async Task CommandMessages(string[] messagesArgs)
 {
-    var resolved = await ResolveMowerAsync(messagesArgs.FirstOrDefault());
+    var resolved = await mowerService.ResolveMowerAsync(messagesArgs.FirstOrDefault());
     if (resolved is null) return;
     var (mowerId, mowerName) = resolved.Value;
 
-    var api = GetClient();
-    await api.AuthenticateAsync();
-    var messages = await api.GetMessagesAsync(mowerId);
+    var messages = await mowerDetailService.GetMessagesAsync(mowerId);
 
     if (messages.Length == 0)
     {
@@ -452,13 +273,11 @@ void CommandErrorCodes()
 
 async Task CommandWorkAreas(string[] workAreasArgs)
 {
-    var resolved = await ResolveMowerAsync(workAreasArgs.FirstOrDefault());
+    var resolved = await mowerService.ResolveMowerAsync(workAreasArgs.FirstOrDefault());
     if (resolved is null) return;
     var (mowerId, mowerName) = resolved.Value;
 
-    var api = GetClient();
-    await api.AuthenticateAsync();
-    var mower = await api.GetMowerAsync(mowerId);
+    var mower = await mowerDetailService.GetMowerDetailAsync(mowerId);
     var areas = mower.Attributes.WorkAreas;
 
     if (areas is null || areas.Length == 0)
@@ -493,13 +312,11 @@ async Task CommandWorkArea(string[] queryArgs)
     var query = queryArgs[0];
     var mowerQuery = queryArgs.Length > 1 ? string.Join(" ", queryArgs.Skip(1)) : null;
 
-    var resolved = await ResolveMowerAsync(mowerQuery);
+    var resolved = await mowerService.ResolveMowerAsync(mowerQuery);
     if (resolved is null) return;
     var (mowerId, mowerName) = resolved.Value;
 
-    var api = GetClient();
-    await api.AuthenticateAsync();
-    var mower = await api.GetMowerAsync(mowerId);
+    var mower = await mowerDetailService.GetMowerDetailAsync(mowerId);
     var areas = mower.Attributes.WorkAreas;
 
     if (areas is null || areas.Length == 0)
@@ -541,7 +358,7 @@ async Task CommandWorkArea(string[] queryArgs)
         return;
     }
 
-    var detail = await api.GetWorkAreaAsync(mowerId, match.WorkAreaId);
+    var detail = await mowerDetailService.GetWorkAreaDetailAsync(mowerId, match.WorkAreaId);
 
     var abandoned = detail.LastTimeAbandoned > 0
         ? DateTimeOffset.FromUnixTimeMilliseconds(detail.LastTimeAbandoned).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
@@ -589,13 +406,11 @@ string FormatCalendarTask(CalendarTask t)
 
 async Task CommandStayOutZones(string[] stayOutZonesArgs)
 {
-    var resolved = await ResolveMowerAsync(stayOutZonesArgs.FirstOrDefault());
+    var resolved = await mowerService.ResolveMowerAsync(stayOutZonesArgs.FirstOrDefault());
     if (resolved is null) return;
     var (mowerId, mowerName) = resolved.Value;
 
-    var api = GetClient();
-    await api.AuthenticateAsync();
-    var mower = await api.GetMowerAsync(mowerId);
+    var mower = await mowerDetailService.GetMowerDetailAsync(mowerId);
     var zones = mower.Attributes.StayOutZones;
 
     if (zones is null || zones.Zones.Length == 0)
@@ -611,16 +426,12 @@ async Task CommandStayOutZones(string[] stayOutZonesArgs)
     }
 }
 
-// Activity values that mean "sitting at the charging station", as opposed to
-// actually out in the garden. Used to suppress repeat polls while parked.
-bool IsAtCharger(string activity) => activity is "CHARGING" or "PARKED_IN_CS";
-
 async Task CommandTrack(string[] trackArgs)
 {
     var intervalArg = trackArgs.FirstOrDefault(a => int.TryParse(a, out _));
     var mowerQuery = trackArgs.FirstOrDefault(a => a != intervalArg);
 
-    var resolved = await ResolveMowerAsync(mowerQuery);
+    var resolved = await mowerService.ResolveMowerAsync(mowerQuery);
     if (resolved is null) return;
     var (mowerId, mowerName) = resolved.Value;
 
@@ -629,17 +440,6 @@ async Task CommandTrack(string[] trackArgs)
         ? int.Parse(intervalArg, CultureInfo.InvariantCulture)
         : config.ScheduledIntervalSeconds;
 
-    Storage.EnsureDataDir();
-    var logPath = Storage.GetTrackLogPath(mowerName);
-    var api = GetClient();
-    await api.AuthenticateAsync();
-
-    Console.WriteLine($"Tracking {mowerName}. Logging to {logPath}. Press Ctrl+C to stop.");
-    Console.WriteLine($"  Active/scheduled: every {activeIntervalSeconds}s   Idle (daytime): every {config.IdleIntervalSeconds}s   " +
-                       $"Night ({config.NightStartHour:00}:00-{config.NightEndHour:00}:00): every {config.NightIntervalSeconds}s");
-    Console.WriteLine("While parked at the charging station and no schedule/mowing is active, only the first poll after arrival is logged.");
-    Console.WriteLine("The mower's schedule is refreshed from schedule.json's cache each poll (no extra API cost) - run 'schedule' to force an update.");
-
     using var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) =>
     {
@@ -647,125 +447,19 @@ async Task CommandTrack(string[] trackArgs)
         cts.Cancel();
     };
 
-    // Seed with whatever's cached so the very first wait (before any poll)
-    // already has something to work with; refreshed for real after each poll.
-    var tasks = GetCachedTasks(mowerId);
-
-    string? lastActivity = null;
-    var recordCount = 0;
-    long totalBytes = 0;
-
-    while (!cts.IsCancellationRequested)
-    {
-        var timestamp = DateTimeOffset.Now;
-        var nextIntervalSeconds = config.IdleIntervalSeconds;
-
-        try
-        {
-            string raw;
-            try
-            {
-                raw = await api.GetMowerRawAsync(mowerId);
-            }
-            catch (HttpRequestException)
-            {
-                // Likely an expired token on a long-running session - re-auth once and retry.
-                await api.AuthenticateAsync();
-                raw = await api.GetMowerRawAsync(mowerId);
-            }
-
-            using var doc = JsonDocument.Parse(raw);
-            var attributes = doc.RootElement.GetProperty("data").GetProperty("attributes");
-            var activity = attributes.GetProperty("mower").GetProperty("activity").GetString() ?? "";
-
-            // The mower payload already carries the schedule - update the
-            // cache from it for free instead of a separate daily fetch.
-            tasks = attributes.TryGetProperty("calendar", out var calendarElement)
-                ? calendarElement.Deserialize<CalendarInfo>()?.Tasks ?? []
-                : [];
-            SaveScheduleForMower(mowerId, mowerName, tasks);
-
-            var atCharger = IsAtCharger(activity);
-            var wasAtCharger = lastActivity is not null && IsAtCharger(lastActivity);
-            var withinSchedule = IsWithinSchedule(tasks, timestamp);
-            var nighttime = IsNighttime(timestamp, config.NightStartHour, config.NightEndHour);
-
-            string reason;
-            if (!atCharger || withinSchedule)
-            {
-                nextIntervalSeconds = activeIntervalSeconds;
-                reason = !atCharger ? "active" : "scheduled window";
-            }
-            else if (nighttime)
-            {
-                nextIntervalSeconds = config.NightIntervalSeconds;
-                reason = "night";
-            }
-            else
-            {
-                nextIntervalSeconds = config.IdleIntervalSeconds;
-                reason = "idle";
-            }
-
-            if (!(atCharger && wasAtCharger))
-            {
-                var byteCount = Encoding.UTF8.GetByteCount(raw);
-                var record = new
-                {
-                    timestamp,
-                    mowerId,
-                    mowerName,
-                    bytes = byteCount,
-                    response = doc.RootElement,
-                };
-                await File.AppendAllTextAsync(logPath, JsonSerializer.Serialize(record) + Environment.NewLine, cts.Token);
-
-                recordCount++;
-                totalBytes += byteCount;
-                Console.WriteLine($"[{timestamp:yyyy-MM-dd HH:mm:ss}] logged (activity: {activity}, {byteCount} bytes, next check in {nextIntervalSeconds}s - {reason}) - " +
-                                   $"{recordCount} records, {totalBytes / 1024.0:F1} KB this session");
-            }
-            else
-            {
-                Console.WriteLine($"[{timestamp:yyyy-MM-dd HH:mm:ss}] skipped (still at charger, next check in {nextIntervalSeconds}s - {reason})");
-            }
-
-            lastActivity = activity;
-        }
-        catch (OperationCanceledException)
-        {
-            break;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[{timestamp:yyyy-MM-dd HH:mm:ss}] poll failed: {ex.Message}");
-        }
-
-        try
-        {
-            await Task.Delay(TimeSpan.FromSeconds(nextIntervalSeconds), cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            break;
-        }
-    }
-
-    Console.WriteLine($"Stopped. {recordCount} records logged, {totalBytes / 1024.0:F1} KB this session. Log file: {logPath}");
+    await trackingService.RunAsync(mowerId, mowerName, config, activeIntervalSeconds, cts.Token);
 }
 
 async Task CommandSchedule(string[] scheduleArgs)
 {
-    var resolved = await ResolveMowerAsync(scheduleArgs.FirstOrDefault());
+    var resolved = await mowerService.ResolveMowerAsync(scheduleArgs.FirstOrDefault());
     if (resolved is null) return;
     var (mowerId, mowerName) = resolved.Value;
 
-    var api = GetClient();
-    await api.AuthenticateAsync();
-    var mower = await api.GetMowerAsync(mowerId);
+    var mower = await mowerDetailService.GetMowerDetailAsync(mowerId);
     var tasks = mower.Attributes.Calendar?.Tasks ?? [];
 
-    SaveScheduleForMower(mowerId, mowerName, tasks);
+    scheduleService.SaveScheduleForMower(mowerId, mowerName, tasks);
 
     if (tasks.Length == 0)
     {
@@ -786,7 +480,7 @@ async Task CommandSchedule(string[] scheduleArgs)
         Console.WriteLine($"  {FormatCalendarTask(t)}{workAreaNote}");
     }
 
-    var nextCalendar = NextCalendarStart(tasks, DateTimeOffset.Now);
+    var nextCalendar = scheduleService.NextCalendarStart(tasks, DateTimeOffset.Now);
     var nextCalendarLabel = nextCalendar is null ? "none" : nextCalendar.Value.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
     var nextPlanned = mower.Attributes.Planner.NextStartTimestamp > 0
         ? DateTimeOffset.FromUnixTimeMilliseconds(mower.Attributes.Planner.NextStartTimestamp).ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)
@@ -815,127 +509,33 @@ async Task CommandSessions(string[] sessionArgs)
     var showCalendar = sessionArgs.Any(a => a is "--calendar" or "-c");
     var mowerQuery = sessionArgs.FirstOrDefault(a => a is not ("--calendar" or "-c"));
 
-    var resolved = await ResolveMowerAsync(mowerQuery);
+    var resolved = await mowerService.ResolveMowerAsync(mowerQuery);
     if (resolved is null) return;
     var (_, mowerName) = resolved.Value;
 
-    var logPath = Storage.GetTrackLogPath(mowerName);
-    if (!File.Exists(logPath))
+    var sessions = trackingService.SummarizeSessions(mowerName, showCalendar);
+    if (sessions.Count == 0) return;
+
+    Console.WriteLine($"Sessions for {mowerName} (newest first, from {Storage.GetTrackLogPath(mowerName)}):");
+    foreach (var s in sessions)
     {
-        Console.WriteLine($"No track log found for {mowerName} at {logPath}.");
-        return;
-    }
+        var endLabel = s.End is null ? "ongoing" : s.End.Value.ToString("HH:mm", CultureInfo.InvariantCulture);
+        var duration = (s.End ?? DateTimeOffset.Now) - s.Start;
 
-    var points = new List<(DateTimeOffset Time, string Activity, int Battery, long WorkAreaId, long PlannerNextStart)>();
-    var workAreaNames = new Dictionary<long, string>();
-    var latestCalendarTasks = Array.Empty<CalendarTask>();
-    var skipped = 0;
-    foreach (var line in File.ReadLines(logPath))
-    {
-        if (string.IsNullOrWhiteSpace(line)) continue;
-        try
-        {
-            using var doc = JsonDocument.Parse(line);
-            var root = doc.RootElement;
-            var timestamp = root.GetProperty("timestamp").GetDateTimeOffset();
-            var attributes = root.GetProperty("response").GetProperty("data").GetProperty("attributes");
-            var mowerObj = attributes.GetProperty("mower");
-            var activity = mowerObj.GetProperty("activity").GetString() ?? "UNKNOWN";
-            var workAreaId = mowerObj.TryGetProperty("workAreaId", out var waIdEl) ? waIdEl.GetInt64() : 0L;
-            var battery = attributes.GetProperty("battery").GetProperty("batteryPercent").GetInt32();
-            var plannerNextStart = attributes.TryGetProperty("planner", out var plannerEl) &&
-                plannerEl.TryGetProperty("nextStartTimestamp", out var nextStartEl)
-                ? nextStartEl.GetInt64()
-                : 0L;
-            points.Add((timestamp, activity, battery, workAreaId, plannerNextStart));
-
-            if (attributes.TryGetProperty("workAreas", out var workAreasEl) && workAreasEl.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var wa in workAreasEl.EnumerateArray())
-                {
-                    if (wa.TryGetProperty("workAreaId", out var idEl) &&
-                        wa.TryGetProperty("name", out var nameEl) &&
-                        !string.IsNullOrWhiteSpace(nameEl.GetString()))
-                    {
-                        workAreaNames[idEl.GetInt64()] = nameEl.GetString()!.Trim();
-                    }
-                }
-            }
-
-            if (attributes.TryGetProperty("calendar", out var calendarEl) &&
-                calendarEl.Deserialize<CalendarInfo>() is { Tasks.Length: > 0 } calendarInfo)
-            {
-                latestCalendarTasks = calendarInfo.Tasks;
-            }
-        }
-        catch (Exception)
-        {
-            skipped++;
-        }
-    }
-
-    if (points.Count == 0)
-    {
-        Console.WriteLine($"Track log for {mowerName} has no readable records.");
-        return;
-    }
-
-    points.Sort((a, b) => a.Time.CompareTo(b.Time));
-
-    // Grouping has to scan oldest-to-newest (each session's end depends on
-    // the *next* point chronologically), but the printed order is
-    // newest-first - so build the lines here, then print them reversed.
-    var lines = new List<string>();
-    var i = 0;
-    while (i < points.Count)
-    {
-        var activity = points[i].Activity;
-        var workAreaId = points[i].WorkAreaId;
-        var start = points[i].Time;
-        var batteryStart = points[i].Battery;
-
-        var j = i;
-        while (j + 1 < points.Count && points[j + 1].Activity == activity && points[j + 1].WorkAreaId == workAreaId)
-        {
-            j++;
-        }
-        var batteryEnd = points[j].Battery;
-        var end = j + 1 < points.Count ? points[j + 1].Time : (DateTimeOffset?)null;
-
-        var endLabel = end is null ? "ongoing" : end.Value.ToString("HH:mm", CultureInfo.InvariantCulture);
-        var duration = (end ?? DateTimeOffset.Now) - start;
-
-        var durationLabel = $"({FormatDuration(duration)})";
-        var workAreaLabel = workAreaNames.TryGetValue(workAreaId, out var waName) ? $"  [{waName}]" : "";
+        var durationLabel = $"({duration.FormatDuration()})";
+        var workAreaLabel = s.WorkAreaName is not null ? $"  [{s.WorkAreaName}]" : "";
         var sessionLine =
-            $"  {start:yyyy-MM-dd}  {DescribeActivity(activity),-11} {start:HH:mm}-{endLabel,-7} " +
-            $"{durationLabel,-9}  battery {batteryStart,3}% -> {batteryEnd,3}%{workAreaLabel}";
+            $"  {s.Start:yyyy-MM-dd}  {DescribeActivity(s.Activity),-11} {s.Start:HH:mm}-{endLabel,-7} " +
+            $"{durationLabel,-9}  battery {s.BatteryStart,3}% -> {s.BatteryEnd,3}%{workAreaLabel}";
 
-        if (showCalendar && IsAtCharger(activity))
+        if (showCalendar && TrackingService.IsAtCharger(s.Activity))
         {
-            var nextCalendar = NextCalendarStart(latestCalendarTasks, start);
-            var nextCalendarLabel = nextCalendar is null ? "none" : nextCalendar.Value.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
-            var plannerNextStart = points[i].PlannerNextStart;
-            var nextPlannedLabel = plannerNextStart > 0
-                ? DateTimeOffset.FromUnixTimeMilliseconds(plannerNextStart).ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)
-                : "not scheduled";
+            var nextCalendarLabel = s.NextCalendarStart is null ? "none" : s.NextCalendarStart.Value.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+            var nextPlannedLabel = s.NextPlannedStart is null ? "not scheduled" : s.NextPlannedStart.Value.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
             sessionLine += $"  next calendar start: {nextCalendarLabel}   next planned start: {nextPlannedLabel}";
         }
 
-        lines.Add(sessionLine);
-
-        i = j + 1;
-    }
-
-    Console.WriteLine($"Sessions for {mowerName} (newest first, from {logPath}):");
-    for (var k = lines.Count - 1; k >= 0; k--)
-    {
-        Console.WriteLine(lines[k]);
-    }
-
-    if (skipped > 0)
-    {
-        Console.WriteLine($"  ({skipped} malformed line(s) skipped)");
+        Console.WriteLine(sessionLine);
     }
 }
 
@@ -951,14 +551,6 @@ string DescribeActivity(string activity) => activity switch
     "UNKNOWN" => "Unknown",
     _ => activity,
 };
-
-string FormatDuration(TimeSpan span)
-{
-    var totalMinutes = Math.Max(0, (int)span.TotalMinutes);
-    var hours = totalMinutes / 60;
-    var minutes = totalMinutes % 60;
-    return hours > 0 ? $"{hours}h{minutes:D2}m" : $"{minutes}m";
-}
 
 void PrintUsage()
 {

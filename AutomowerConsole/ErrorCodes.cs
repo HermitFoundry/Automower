@@ -1,6 +1,8 @@
 // Source: Husqvarna Automower Connect API error codes, as documented by the
 // aioautomower project (https://github.com/Thomas55555/aioautomower).
-static class ErrorCodes
+namespace AutomowerConsole;
+
+internal static class ErrorCodes
 {
     public static readonly IReadOnlyDictionary<int, string> Descriptions = new Dictionary<int, string>
     {

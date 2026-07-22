@@ -6,5 +6,5 @@
 # 'kill -INT' on the dotnet-run PID does nothing; only SIGKILL gets through.
 set -e
 dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-dotnet build "$dir/AutomowerConsole.csproj" -v quiet
-exec dotnet "$dir/bin/Debug/net10.0/AutomowerConsole.dll" "$@"
+dotnet build "$dir/AutomowerConsole/AutomowerConsole.csproj" -v quiet
+exec dotnet "$dir/AutomowerConsole/bin/Debug/net10.0/AutomowerConsole.dll" "$@"

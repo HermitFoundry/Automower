@@ -1,13 +1,17 @@
 using System.Text.Json;
 
-static class Storage
+namespace AutomowerConsole;
+
+internal static class Storage
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     // Anchored to the repo root (found by walking up from the running
-    // executable to the nearest .csproj), not the build output folder -
-    // AppContext.BaseDirectory is bin/<Config>/<TFM>/ and gets wiped by
-    // 'dotnet clean', which would otherwise silently discard config/state.
+    // executable to the nearest .slnx - there's only ever one, and it lives
+    // in the true repo root, unlike .csproj which now sits one level down
+    // in AutomowerConsole/), not the build output folder - AppContext.
+    // BaseDirectory is AutomowerConsole/bin/<Config>/<TFM>/ and gets wiped
+    // by 'dotnet clean', which would otherwise silently discard config/state.
     private static readonly string RepoRoot = FindRepoRoot();
 
     private static string ConfigDir => Path.Combine(RepoRoot, ".config");
@@ -37,13 +41,13 @@ static class Storage
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (dir.GetFiles("*.csproj").Length > 0)
+            if (dir.GetFiles("*.slnx").Length > 0)
             {
                 return dir.FullName;
             }
             dir = dir.Parent;
         }
-        // No .csproj found walking up (e.g. a bare publish without source) -
+        // No .slnx found walking up (e.g. a bare publish without source) -
         // fall back to sitting next to the executable, as before.
         return AppContext.BaseDirectory;
     }
@@ -59,7 +63,7 @@ static class Storage
         }
 
         var config = JsonSerializer.Deserialize<Config>(File.ReadAllText(ConfigPath))
-            ?? throw new InvalidOperationException("Failed to parse config.json");
+                     ?? throw new InvalidOperationException("Failed to parse config.json");
 
         if (string.IsNullOrWhiteSpace(config.AppKey) || config.AppKey == "YOUR_APP_KEY_HERE")
         {

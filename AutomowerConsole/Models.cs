@@ -1,5 +1,7 @@
 using System.Text.Json.Serialization;
 
+namespace AutomowerConsole;
+
 record Config
 {
     public string AppKey { get; init; } = "";

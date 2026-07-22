@@ -55,13 +55,12 @@ am.cmd <command> [args]        # Windows
 ./am.sh <command> [args]       # Linux/macOS
 ```
 
-On Linux/macOS, `am.sh` (and `migrate-to-dotfolders.sh`, below) need the
-executable bit set once per checkout — a fresh `git clone`/`git pull` won't
-carry it automatically on every system. If you get "Permission denied"
-trying to run `./am.sh`, this is why:
+On Linux/macOS, `am.sh` needs the executable bit set once per checkout — a
+fresh `git clone`/`git pull` won't carry it automatically on every system.
+If you get "Permission denied" trying to run `./am.sh`, this is why:
 
 ```
-chmod +x am.sh migrate-to-dotfolders.sh
+chmod +x am.sh
 ```
 
 After that, `./am.sh <command>` works directly. If you'd rather not chmod
@@ -75,22 +74,6 @@ build-and-launch wrapper, and it does not reliably forward POSIX signals
 safe either way, since every poll is flushed to disk immediately). `am.cmd`/
 `am.sh` avoid this by launching the built `.dll` directly — no wrapper
 process in between.
-
-## Migrating an existing checkout
-
-If you have an older checkout where `config.json` and the generated
-`mowers.json`/`state.json`/`schedule.json`/`track.jsonl` still live under
-`bin/` (from before those moved to `.config/`/`.data/`), run this once to
-move everything into place without losing anything — including splitting an
-old combined `track.jsonl` into the current per-mower log files (using each
-line's own `mowerName` field via `awk`, no extra dependency), merging into
-any per-mower file that already exists rather than overwriting it.
-
-```
-./migrate-to-dotfolders.sh
-```
-
-Safe to re-run; it skips anything already migrated.
 
 ## Commands
 
@@ -306,15 +289,41 @@ placeholder template to copy from if you ever need to recreate it by hand;
 
 ## Project layout
 
-- `Program.cs` — CLI entry point and command implementations
-- `HusqvarnaClient.cs` — OAuth2 authentication and Automower Connect API calls
-- `Models.cs` — JSON response models and config/cache record types
-- `Storage.cs` — reads/writes `.config/config.json` and `.data/*.json(l)`, and
-  finds the repo root that they're anchored to
-- `ErrorCodes.cs` — full Automower error code → description table
-- `am.cmd` / `am.sh` — shortcuts that forward arguments to `dotnet run`
-- `migrate-to-dotfolders.sh` — one-time migration from the old `bin/`-based
-  config/data layout to `.config/`/`.data/`
+The console app lives in its own `AutomowerConsole/` subfolder, with a
+sibling `AutomowerConsole.Tests/` (NUnit, no tests written yet — scaffolding
+only) referencing it via `InternalsVisibleTo`, and `am.cmd`, `am.sh`, and
+`automower.slnx` at the repo root:
+
+- `AutomowerConsole/Program.cs` — CLI entry point, argument parsing, and
+  result printing
+- `AutomowerConsole/MowerService.cs` — mower listing, caching, and
+  name/id/index resolution
+- `AutomowerConsole/MowerDetailService.cs` — fetching a specific mower's live
+  status, messages, and work area detail
+- `AutomowerConsole/ScheduleService.cs` — calendar/schedule calculations and
+  the schedule cache
+- `AutomowerConsole/TrackingService.cs` — the `track` polling loop and
+  `sessions` log summarization
+- `AutomowerConsole/AutomowerConnect.cs` — facade over `HusqvarnaClient` that
+  owns the auth lifecycle (auto-authenticate, retry once on token expiry),
+  reached via a shared `AutomowerConnect.Instance` so the services above
+  never touch auth directly
+- `AutomowerConsole/HusqvarnaClient.cs` — low-level OAuth2 + Automower
+  Connect API HTTP calls
+- `AutomowerConsole/Models.cs` — JSON response models and config/cache
+  record types
+- `AutomowerConsole/Storage.cs` — reads/writes `.config/config.json` and
+  `.data/*.json(l)`, and finds the repo root (nearest `.slnx`, not `.csproj`
+  — there's only ever one, and it stays in the true repo root even as more
+  projects are added) that they're anchored to
+- `AutomowerConsole/ErrorCodes.cs` — full Automower error code → description
+  table
+- `AutomowerConsole.Tests/AutomowerConsole.Tests.csproj` — NUnit test
+  project (empty for now); `AutomowerConsole.csproj` grants it access to
+  internal types via `<InternalsVisibleTo>`
+- `automower.slnx` — solution file referencing both projects
+- `am.cmd` / `am.sh` — shortcuts that build `AutomowerConsole.csproj` once
+  and then run the compiled `.dll` directly (not `dotnet run` — see above)
 
 For API implementation notes (auth flow, endpoint quirks, timestamp units,
 external references) see `.claude/skills/automower-api/SKILL.md`.

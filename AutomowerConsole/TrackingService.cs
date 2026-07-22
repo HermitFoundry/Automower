@@ -1,0 +1,243 @@
+using System.Text;
+using System.Text.Json;
+using System.Globalization;
+
+namespace AutomowerConsole;
+
+// Reads and writes the per-mower track-<mower>.jsonl log: the live polling
+// loop ('track') and the historical session summary ('sessions'). Both
+// revolve around the same artifact, hence one class. Prints live progress
+// during RunAsync (same accepted-Console-output pattern as
+// MowerService.ResolveMowerAsync - it's feedback intrinsic to the operation,
+// not a separate presentation layer) but SummarizeSessions returns data;
+// Program.cs still does that command's line formatting/printing.
+internal class TrackingService(ScheduleService schedule)
+{
+    // Activity values that mean "sitting at the charging station", as opposed to
+    // actually out in the garden. Used to suppress repeat polls while parked.
+    public static bool IsAtCharger(string activity) => activity is "CHARGING" or "PARKED_IN_CS";
+
+    public async Task RunAsync(string mowerId, string mowerName, Config config, int activeIntervalSeconds, CancellationToken cancellationToken)
+    {
+        var connect = AutomowerConnect.Instance;
+        Storage.EnsureDataDir();
+        var logPath = Storage.GetTrackLogPath(mowerName);
+        await connect.AuthenticateAsync();
+
+        Console.WriteLine($"Tracking {mowerName}. Logging to {logPath}. Press Ctrl+C to stop.");
+        Console.WriteLine($"  Active/scheduled: every {activeIntervalSeconds}s   Idle (daytime): every {config.IdleIntervalSeconds}s   " +
+                           $"Night ({config.NightStartHour:00}:00-{config.NightEndHour:00}:00): every {config.NightIntervalSeconds}s");
+        Console.WriteLine("While parked at the charging station and no schedule/mowing is active, only the first poll after arrival is logged.");
+        Console.WriteLine("The mower's schedule is refreshed from schedule.json's cache each poll (no extra API cost) - run 'schedule' to force an update.");
+
+        // Seed with whatever's cached so the very first wait (before any poll)
+        // already has something to work with; refreshed for real after each poll.
+        var tasks = schedule.GetCachedTasks(mowerId);
+
+        string? lastActivity = null;
+        var recordCount = 0;
+        long totalBytes = 0;
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var timestamp = DateTimeOffset.Now;
+            var nextIntervalSeconds = config.IdleIntervalSeconds;
+
+            try
+            {
+                var raw = await connect.GetMowerRawAsync(mowerId);
+
+                using var doc = JsonDocument.Parse(raw);
+                var attributes = doc.RootElement.GetProperty("data").GetProperty("attributes");
+                var activity = attributes.GetProperty("mower").GetProperty("activity").GetString() ?? "";
+
+                // The mower payload already carries the schedule - update the
+                // cache from it for free instead of a separate daily fetch.
+                tasks = attributes.TryGetProperty("calendar", out var calendarElement)
+                    ? calendarElement.Deserialize<CalendarInfo>()?.Tasks ?? []
+                    : [];
+                schedule.SaveScheduleForMower(mowerId, mowerName, tasks);
+
+                var atCharger = IsAtCharger(activity);
+                var wasAtCharger = lastActivity is not null && IsAtCharger(lastActivity);
+                (nextIntervalSeconds, var reason) = schedule.DetermineTrackingInterval(tasks, activity, activeIntervalSeconds, timestamp, config);
+
+                if (!(atCharger && wasAtCharger))
+                {
+                    var byteCount = Encoding.UTF8.GetByteCount(raw);
+                    var record = new
+                    {
+                        timestamp,
+                        mowerId,
+                        mowerName,
+                        bytes = byteCount,
+                        response = doc.RootElement,
+                    };
+                    await File.AppendAllTextAsync(logPath, JsonSerializer.Serialize(record) + Environment.NewLine, cancellationToken);
+
+                    recordCount++;
+                    totalBytes += byteCount;
+                    Console.WriteLine($"[{timestamp:yyyy-MM-dd HH:mm:ss}] logged (activity: {activity}, {byteCount} bytes, next check in {nextIntervalSeconds}s - {reason}) - " +
+                                       $"{recordCount} records, {totalBytes / 1024.0:F1} KB this session");
+                }
+                else
+                {
+                    Console.WriteLine($"[{timestamp:yyyy-MM-dd HH:mm:ss}] skipped (still at charger, next check in {nextIntervalSeconds}s - {reason})");
+                }
+
+                lastActivity = activity;
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{timestamp:yyyy-MM-dd HH:mm:ss}] poll failed: {ex.Message}");
+            }
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(nextIntervalSeconds), cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
+
+        Console.WriteLine($"Stopped. {recordCount} records logged, {totalBytes / 1024.0:F1} KB this session. Log file: {logPath}");
+    }
+
+    // Reads a mower's track-<mower>.jsonl and summarizes it into sessions: runs
+    // of consecutive polls sharing the same (mower.activity, mower.workAreaId) -
+    // split on either changing, since activity can stay MOWING across a switch
+    // from one work area straight into the next. A session's end is the
+    // timestamp of the *next* differing poll (not its own last poll), since
+    // that's the earliest point we can confirm the state changed - this matters
+    // most for charger stays, where 'track' only logs one poll on arrival and
+    // then skips repeats, so a session can be a single log line whose real end
+    // is only knowable from what comes after it. Returned newest first.
+    public List<TrackSession> SummarizeSessions(string mowerName, bool includeCalendarInfo)
+    {
+        var logPath = Storage.GetTrackLogPath(mowerName);
+        if (!File.Exists(logPath))
+        {
+            Console.WriteLine($"No track log found for {mowerName} at {logPath}.");
+            return [];
+        }
+
+        var points = new List<(DateTimeOffset Time, string Activity, int Battery, long WorkAreaId, long PlannerNextStart)>();
+        var workAreaNames = new Dictionary<long, string>();
+        var latestCalendarTasks = Array.Empty<CalendarTask>();
+        var skipped = 0;
+        foreach (var line in File.ReadLines(logPath))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+                var timestamp = root.GetProperty("timestamp").GetDateTimeOffset();
+                var attributes = root.GetProperty("response").GetProperty("data").GetProperty("attributes");
+                var mowerObj = attributes.GetProperty("mower");
+                var activity = mowerObj.GetProperty("activity").GetString() ?? "UNKNOWN";
+                var workAreaId = mowerObj.TryGetProperty("workAreaId", out var waIdEl) ? waIdEl.GetInt64() : 0L;
+                var battery = attributes.GetProperty("battery").GetProperty("batteryPercent").GetInt32();
+                var plannerNextStart = attributes.TryGetProperty("planner", out var plannerEl) &&
+                    plannerEl.TryGetProperty("nextStartTimestamp", out var nextStartEl)
+                    ? nextStartEl.GetInt64()
+                    : 0L;
+                points.Add((timestamp, activity, battery, workAreaId, plannerNextStart));
+
+                if (attributes.TryGetProperty("workAreas", out var workAreasEl) && workAreasEl.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var wa in workAreasEl.EnumerateArray())
+                    {
+                        if (wa.TryGetProperty("workAreaId", out var idEl) &&
+                            wa.TryGetProperty("name", out var nameEl) &&
+                            !string.IsNullOrWhiteSpace(nameEl.GetString()))
+                        {
+                            workAreaNames[idEl.GetInt64()] = nameEl.GetString()!.Trim();
+                        }
+                    }
+                }
+
+                if (attributes.TryGetProperty("calendar", out var calendarEl) &&
+                    calendarEl.Deserialize<CalendarInfo>() is { Tasks.Length: > 0 } calendarInfo)
+                {
+                    latestCalendarTasks = calendarInfo.Tasks;
+                }
+            }
+            catch (Exception)
+            {
+                skipped++;
+            }
+        }
+
+        if (points.Count == 0)
+        {
+            Console.WriteLine($"Track log for {mowerName} has no readable records.");
+            return [];
+        }
+
+        points.Sort((a, b) => a.Time.CompareTo(b.Time));
+
+        // Grouping has to scan oldest-to-newest (each session's end depends on
+        // the *next* point chronologically); reversed to newest-first at the end.
+        var sessions = new List<TrackSession>();
+        var i = 0;
+        while (i < points.Count)
+        {
+            var activity = points[i].Activity;
+            var workAreaId = points[i].WorkAreaId;
+            var start = points[i].Time;
+            var batteryStart = points[i].Battery;
+
+            var j = i;
+            while (j + 1 < points.Count && points[j + 1].Activity == activity && points[j + 1].WorkAreaId == workAreaId)
+            {
+                j++;
+            }
+            var batteryEnd = points[j].Battery;
+            var end = j + 1 < points.Count ? points[j + 1].Time : (DateTimeOffset?)null;
+
+            DateTimeOffset? nextCalendarStart = null;
+            DateTimeOffset? nextPlannedStart = null;
+            if (includeCalendarInfo && IsAtCharger(activity))
+            {
+                nextCalendarStart = schedule.NextCalendarStart(latestCalendarTasks, start);
+                var plannerNextStart = points[i].PlannerNextStart;
+                nextPlannedStart = plannerNextStart > 0
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(plannerNextStart).ToLocalTime()
+                    : null;
+            }
+
+            sessions.Add(new TrackSession(
+                start, end, activity, batteryStart, batteryEnd,
+                workAreaNames.TryGetValue(workAreaId, out var waName) ? waName : null,
+                nextCalendarStart, nextPlannedStart));
+
+            i = j + 1;
+        }
+
+        sessions.Reverse();
+
+        if (skipped > 0)
+        {
+            Console.WriteLine($"  ({skipped} malformed line(s) skipped)");
+        }
+
+        return sessions;
+    }
+}
+
+internal record TrackSession(
+    DateTimeOffset Start,
+    DateTimeOffset? End,
+    string Activity,
+    int BatteryStart,
+    int BatteryEnd,
+    string? WorkAreaName,
+    DateTimeOffset? NextCalendarStart,
+    DateTimeOffset? NextPlannedStart);

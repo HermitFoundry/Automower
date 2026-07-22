@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="AutomowerConsole/AutomowerConsole.csproj" />
+  <Project Path="AutomowerConsole.Tests/AutomowerConsole.Tests.csproj" />
+</Solution>
