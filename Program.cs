@@ -187,6 +187,27 @@ bool IsWithinSchedule(CalendarTask[] tasks, DateTimeOffset now)
     return false;
 }
 
+// Earliest calendar task start strictly after 'after', scanning up to 8 days
+// forward (guarantees covering a full week even from late in the day today).
+// Returns null if there are no tasks at all.
+DateTimeOffset? NextCalendarStart(CalendarTask[] tasks, DateTimeOffset after)
+{
+    if (tasks.Length == 0) return null;
+
+    for (var dayOffset = 0; dayOffset <= 7; dayOffset++)
+    {
+        var day = after.Date.AddDays(dayOffset);
+        var dayOfWeek = day.DayOfWeek;
+        foreach (var t in tasks.OrderBy(t => t.Start))
+        {
+            if (!DayFlag(t, dayOfWeek)) continue;
+            var candidate = new DateTimeOffset(day, after.Offset).AddMinutes(t.Start);
+            if (candidate > after) return candidate;
+        }
+    }
+    return null;
+}
+
 // Nighttime window wraps past midnight when startHour > endHour (e.g. 22 -> 8).
 bool IsNighttime(DateTimeOffset now, int startHour, int endHour)
     => startHour > endHour
@@ -758,6 +779,20 @@ async Task CommandSchedule(string[] scheduleArgs)
         var workAreaNote = t.WorkAreaId is not null ? $" [work area {t.WorkAreaId}]" : "";
         Console.WriteLine($"  {FormatCalendarTask(t)}{workAreaNote}");
     }
+
+    var nextCalendar = NextCalendarStart(tasks, DateTimeOffset.Now);
+    var nextCalendarLabel = nextCalendar is null ? "none" : nextCalendar.Value.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+    var nextPlanned = mower.Attributes.Planner.NextStartTimestamp > 0
+        ? DateTimeOffset.FromUnixTimeMilliseconds(mower.Attributes.Planner.NextStartTimestamp).ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)
+        : "not scheduled";
+
+    Console.WriteLine();
+    Console.WriteLine($"  Next calendar start: {nextCalendarLabel} (from the recurring schedule above)");
+    Console.WriteLine($"  Next planned start:  {nextPlanned} (the mower's live decision - may differ, e.g. due to battery)");
+    if (mower.Attributes.Planner.RestrictedReason is not ("NOT_APPLICABLE" or ""))
+    {
+        Console.WriteLine($"  Restricted: {mower.Attributes.Planner.RestrictedReason}");
+    }
 }
 
 // Reads a mower's track-<mower>.jsonl and summarizes it into sessions: runs
@@ -771,7 +806,10 @@ async Task CommandSchedule(string[] scheduleArgs)
 // is only knowable from what comes after it.
 async Task CommandSessions(string[] sessionArgs)
 {
-    var resolved = await ResolveMowerAsync(sessionArgs.FirstOrDefault());
+    var showCalendar = sessionArgs.Any(a => a is "--calendar" or "-c");
+    var mowerQuery = sessionArgs.FirstOrDefault(a => a is not ("--calendar" or "-c"));
+
+    var resolved = await ResolveMowerAsync(mowerQuery);
     if (resolved is null) return;
     var (_, mowerName) = resolved.Value;
 
@@ -782,8 +820,9 @@ async Task CommandSessions(string[] sessionArgs)
         return;
     }
 
-    var points = new List<(DateTimeOffset Time, string Activity, int Battery, long WorkAreaId)>();
+    var points = new List<(DateTimeOffset Time, string Activity, int Battery, long WorkAreaId, long PlannerNextStart)>();
     var workAreaNames = new Dictionary<long, string>();
+    var latestCalendarTasks = Array.Empty<CalendarTask>();
     var skipped = 0;
     foreach (var line in File.ReadLines(logPath))
     {
@@ -798,7 +837,11 @@ async Task CommandSessions(string[] sessionArgs)
             var activity = mowerObj.GetProperty("activity").GetString() ?? "UNKNOWN";
             var workAreaId = mowerObj.TryGetProperty("workAreaId", out var waIdEl) ? waIdEl.GetInt64() : 0L;
             var battery = attributes.GetProperty("battery").GetProperty("batteryPercent").GetInt32();
-            points.Add((timestamp, activity, battery, workAreaId));
+            var plannerNextStart = attributes.TryGetProperty("planner", out var plannerEl) &&
+                plannerEl.TryGetProperty("nextStartTimestamp", out var nextStartEl)
+                ? nextStartEl.GetInt64()
+                : 0L;
+            points.Add((timestamp, activity, battery, workAreaId, plannerNextStart));
 
             if (attributes.TryGetProperty("workAreas", out var workAreasEl) && workAreasEl.ValueKind == JsonValueKind.Array)
             {
@@ -811,6 +854,12 @@ async Task CommandSessions(string[] sessionArgs)
                         workAreaNames[idEl.GetInt64()] = nameEl.GetString()!.Trim();
                     }
                 }
+            }
+
+            if (attributes.TryGetProperty("calendar", out var calendarEl) &&
+                calendarEl.Deserialize<CalendarInfo>() is { Tasks.Length: > 0 } calendarInfo)
+            {
+                latestCalendarTasks = calendarInfo.Tasks;
             }
         }
         catch (Exception)
@@ -827,7 +876,10 @@ async Task CommandSessions(string[] sessionArgs)
 
     points.Sort((a, b) => a.Time.CompareTo(b.Time));
 
-    Console.WriteLine($"Sessions for {mowerName} (from {logPath}):");
+    // Grouping has to scan oldest-to-newest (each session's end depends on
+    // the *next* point chronologically), but the printed order is
+    // newest-first - so build the lines here, then print them reversed.
+    var lines = new List<string>();
     var i = 0;
     while (i < points.Count)
     {
@@ -849,11 +901,30 @@ async Task CommandSessions(string[] sessionArgs)
 
         var durationLabel = $"({FormatDuration(duration)})";
         var workAreaLabel = workAreaNames.TryGetValue(workAreaId, out var waName) ? $"  [{waName}]" : "";
-        Console.WriteLine(
+        var sessionLine =
             $"  {start:yyyy-MM-dd}  {DescribeActivity(activity),-11} {start:HH:mm}-{endLabel,-7} " +
-            $"{durationLabel,-9}  battery {batteryStart,3}% -> {batteryEnd,3}%{workAreaLabel}");
+            $"{durationLabel,-9}  battery {batteryStart,3}% -> {batteryEnd,3}%{workAreaLabel}";
+
+        if (showCalendar && IsAtCharger(activity))
+        {
+            var nextCalendar = NextCalendarStart(latestCalendarTasks, start);
+            var nextCalendarLabel = nextCalendar is null ? "none" : nextCalendar.Value.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+            var plannerNextStart = points[i].PlannerNextStart;
+            var nextPlannedLabel = plannerNextStart > 0
+                ? DateTimeOffset.FromUnixTimeMilliseconds(plannerNextStart).ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)
+                : "not scheduled";
+            sessionLine += $"  next calendar start: {nextCalendarLabel}   next planned start: {nextPlannedLabel}";
+        }
+
+        lines.Add(sessionLine);
 
         i = j + 1;
+    }
+
+    Console.WriteLine($"Sessions for {mowerName} (newest first, from {logPath}):");
+    for (var k = lines.Count - 1; k >= 0; k--)
+    {
+        Console.WriteLine(lines[k]);
     }
 
     if (skipped > 0)
@@ -905,17 +976,21 @@ void PrintUsage()
           automower workareas [mower]           Show all work areas (optionally for a specific mower)
           automower workarea <name|id> [mower]  Show detail for one work area (optionally for a specific mower)
           automower stayoutzones [mower]        Show stay-out zones (optionally for a specific mower)
-          automower schedule [mower]            Show and refresh the cached schedule (schedule.json)
+          automower schedule [mower]            Show the calendar, refresh it in schedule.json, and show
+                                                 the live next calendar/planned start
           automower track [seconds] [mower]     Poll status adaptively and log to a per-mower
                                                  track-<mower>.jsonl: fast (default 60s, [seconds]
                                                  overrides) while active or in a scheduled window, else
                                                  every 5 min in daytime, else every 30 min at night
                                                  (22:00-08:00) - all configurable via 'config'. Skips
                                                  repeat polls while parked at the charger.
-          automower sessions [mower]            Summarize track-<mower>.jsonl into one line per
+          automower sessions [--calendar] [mower]
+                                                 Summarize track-<mower>.jsonl into one line per
                                                  mowing/charging/etc. session (split on activity or
                                                  work area changing): date, start-end time, duration,
-                                                 battery start% -> end%, and work area name
+                                                 battery start% -> end%, and work area name. --calendar
+                                                 adds the next calendar/planned start (as of that poll)
+                                                 under each Charging/Parked session
           automower help                        Show this help
         """);
 }

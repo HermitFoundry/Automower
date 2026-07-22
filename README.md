@@ -100,9 +100,9 @@ selection.
 | `workareas [mower]` | List all work areas |
 | `workarea <name\|id> [mower]` | Detailed info for one work area, including its schedule |
 | `stayoutzones [mower]` | List configured stay-out zones |
-| `schedule [mower]` | Show and refresh the cached schedule (`.data/schedule.json`) |
+| `schedule [mower]` | Show the calendar, refresh `.data/schedule.json`, and show the live next calendar/planned start |
 | `track [seconds] [mower]` | Adaptive-interval polling with logging to a per-mower `.data/track-<mower>.jsonl` (see below) |
-| `sessions [mower]` | Summarize a mower's track log into one line per mowing/charging/etc. session (see below) |
+| `sessions [--calendar] [mower]` | Summarize a mower's track log into one line per mowing/charging/etc. session (see below) |
 | `help` | Show usage |
 
 ### Examples
@@ -169,20 +169,20 @@ since each poll is flushed to disk immediately.
 
 ### `sessions`: summarizing a track log
 
-`sessions [mower]` reads that mower's `track-<mower>.jsonl` and groups
-consecutive polls sharing the same `activity` **and** work area (Mowing,
-Charging, Parked, Going home, Leaving, Stopped, ...) into one line per
-session — a work area switch mid-`Mowing` starts a new session even without
-an activity change:
+`sessions [--calendar] [mower]` reads that mower's `track-<mower>.jsonl` and
+groups consecutive polls sharing the same `activity` **and** work area
+(Mowing, Charging, Parked, Going home, Leaving, Stopped, ...) into one line
+per session, newest first — a work area switch mid-`Mowing` starts a new
+session even without an activity change:
 
 ```
-Sessions for AM405X (from .data/track-AM405X.jsonl):
-  2026-07-21  Charging    23:10-06:00   (6h50m)    battery  40% ->  40%
-  2026-07-22  Leaving     06:00-06:05   (5m)       battery 100% -> 100%
-  2026-07-22  Mowing      06:05-08:00   (1h55m)    battery  98% ->  70%  [Front Lawn]
-  2026-07-22  Mowing      08:00-08:45   (45m)      battery  70% ->  55%  [Back Yard]
+Sessions for AM405X (newest first, from .data/track-AM405X.jsonl):
+  2026-07-22  Parked      08:55-ongoing (3h05m)    battery  48% ->  48%
   2026-07-22  Going home  08:45-08:55   (10m)      battery  50% ->  50%  [Back Yard]
-  2026-07-22  Parked      08:55-12:00   (3h05m)    battery  48% ->  48%
+  2026-07-22  Mowing      08:00-08:45   (45m)      battery  70% ->  55%  [Back Yard]
+  2026-07-22  Mowing      06:05-08:00   (1h55m)    battery  98% ->  70%  [Front Lawn]
+  2026-07-22  Leaving     06:00-06:05   (5m)       battery 100% -> 100%
+  2026-07-21  Charging    23:10-06:00   (6h50m)    battery  40% ->  40%
 ```
 
 The work area name (in brackets) comes from that same poll's `workAreaId`,
@@ -197,6 +197,35 @@ charging session is often a single log line; using the next poll's timestamp
 is the earliest point the log can actually confirm the mower left. The last
 session in the file (still ongoing) shows `ongoing` instead of an end time,
 with duration computed to now.
+
+**`--calendar`** appends the next calendar start and next planned start to
+each `Charging`/`Parked` session line, **as they stood at that historical
+poll** (both are embedded in every poll's raw payload, so no extra API call
+is needed — see **`calendar` vs `planner`** below for what each one means):
+
+```
+  2026-07-22  Parked      13:02-ongoing (7h05m)    battery  95% ->  95%  next calendar start: 2026-07-23 09:00   next planned start: 2026-07-22 16:03
+```
+
+### `calendar` vs `planner`
+
+Two related but different things show up throughout this tool:
+
+- **`calendar`** — the static, user-configured recurring schedule (what you
+  set up in the app): a list of tasks, each with a start time, duration,
+  which weekdays it applies to, and which work area. This is what
+  `workarea`/`schedule` display, and what `sessions --calendar`'s "next
+  calendar start" is computed from.
+- **`planner`** — the mower's live, computed next-action state, derived
+  *from* the calendar plus real-time factors (battery, restrictions,
+  manual overrides). Its `nextStartTimestamp` is "next planned start" —
+  it can differ from a naive calendar lookup, since the mower's own
+  decision-making can push the actual next start later (or, in principle,
+  earlier) than what the calendar alone would suggest.
+
+`schedule [mower]` shows both: the calendar (refreshed into
+`.data/schedule.json`), plus the live "Next calendar start" / "Next planned
+start" pair and any active `restrictedReason`.
 
 ### Running `track` unattended (e.g. over SSH / `docker exec`)
 
@@ -222,6 +251,24 @@ tmux attach -t automower    # reattach later to check on it or Ctrl+C it
 One session per mower if you're running `track` for more than one at a
 time (`tmux new -s automower-405x`, etc. — see **Commands** for the
 `[mower]` override).
+
+**Deleting a tmux session** once you're done with it — two ways:
+
+- From inside it: stop `track` first (Ctrl+C), then exit the shell
+  (`exit` or Ctrl+D). A tmux session closes itself automatically once the
+  last program running inside it exits — there's nothing extra to delete.
+- From outside it, without attaching (e.g. you just want to kill it and
+  don't care about the summary output):
+
+  ```
+  tmux ls                          # list sessions, confirm the name
+  tmux kill-session -t automower   # force-delete it, whatever's running inside dies too
+  ```
+
+  `tmux kill-session` doesn't stop `track` gracefully first — it's the
+  tmux equivalent of closing the terminal window, so treat it like the
+  `kill -9` fallback further up: your log data is still safe (flushed
+  after every poll), you just won't get the clean summary line.
 
 ## Config and generated files
 

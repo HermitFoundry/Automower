@@ -137,8 +137,9 @@ same `CalendarTask[]` shape used by `workarea`'s per-area schedule, but with
 
 ### `sessions` — summarizing a track log
 
-`sessions [mower]` (`CommandSessions`) reads `track-<mower>.jsonl` directly
-(no API call) and groups consecutive polls sharing the same
+`sessions [--calendar] [mower]` (`CommandSessions`) reads `track-<mower>.jsonl`
+directly (no API call unless resolving the mower name from `[mower]` needs
+the cached-mowers fallback) and groups consecutive polls sharing the same
 `(activity, workAreaId)` pair into sessions - split on **either** changing,
 not just activity, since a mower can go straight from one work area into the
 next while `activity` stays `MOWING` the whole time (verified with a
@@ -173,6 +174,59 @@ midnight, single-line Parked session between two Leaving/Mowing sessions,
 trailing ongoing Mowing session, and a two-work-area Mowing sequence that
 split correctly despite constant activity) before confirming against real
 (if sparse) local data - all cases behaved correctly.
+
+**Print order is newest-first**, but grouping still has to scan
+oldest-to-newest internally (each session's end depends on the *next* point
+chronologically) - `points` is sorted ascending as before, session strings
+are accumulated into a `lines` list in that same ascending order, then
+printed by iterating `lines` backwards. Don't be tempted to reverse `points`
+itself before grouping; that would break the "next differing poll" lookahead
+the whole end-time calculation depends on.
+
+**`--calendar`** appends two values to the end of `Charging`/`Parked` session
+lines only (`IsAtCharger(activity)`) - same line, not a second line (kept
+single-line deliberately for wide-terminal use), both sourced from data
+already embedded in that session's *own* historical poll(s), so still zero
+extra API calls:
+- "next calendar start" — `NextCalendarStart(tasks, sessionStart)`, a new
+  helper next to `IsWithinSchedule`/`IsNighttime` that scans up to 8 days
+  forward for the earliest task start strictly after a given reference time.
+  `tasks` here is `latestCalendarTasks`, updated while scanning the log
+  whenever a line's `attributes.calendar` deserializes to a non-empty
+  `CalendarInfo` (mirrors the `workAreaNames` caching pattern already used
+  for work area labels).
+- "next planned start" — read directly from that session's first poll's own
+  `attributes.planner.nextStartTimestamp` (captured per-point as
+  `PlannerNextStart` when parsing `points`), **not** recomputed live - it's
+  a historical snapshot of what the mower's planner believed at the time,
+  which is deliberate: the two Parked sessions in real test data showed
+  different "next planned start" values (16:03 vs 11:00) despite an
+  unchanged calendar, demonstrating the planner's live decision-making
+  really does move independently of the static schedule.
+
+### `calendar` vs `planner`
+
+Two distinct pieces of the mower payload, easy to conflate:
+
+- `attributes.calendar.tasks[]` — static, user-configured recurring
+  schedule. What `workarea`/`schedule` display; what `NextCalendarStart`
+  computes from.
+- `attributes.planner` — `{nextStartTimestamp, override, restrictedReason}`,
+  the mower's live/computed next-action state, derived from the calendar
+  plus real-time factors (battery, restrictions, overrides). Can diverge
+  from a naive calendar lookup - confirmed via real data where "next
+  planned start" (11:00 or 16:03) differed from "next calendar start"
+  (09:00) on the same day. `override` is not currently modeled in
+  `PlannerInfo` (`Models.cs`) or displayed anywhere - only
+  `NextStartTimestamp` and `RestrictedReason` are, since that's all that's
+  been asked for so far.
+
+`schedule [mower]` (`CommandSchedule`) shows both together: the calendar
+tasks (as before), then "Next calendar start" / "Next planned start" (via
+the same `NextCalendarStart` helper plus live `mower.Attributes.Planner`),
+and `RestrictedReason` when it's not `NOT_APPLICABLE`/empty - confirmed
+`WEEK_SCHEDULE` as a real observed value on this account, previously unseen
+in any earlier session.
 
 ## Authentication
 
