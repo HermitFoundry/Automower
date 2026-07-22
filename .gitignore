@@ -511,11 +511,9 @@ fabric.properties
 # End of https://www.toptal.com/developers/gitignore/api/rider
 
 ### AutomowerConsole ###
-# Holds a live app key/secret - never commit. Use config.example.json as the template.
-config.json
+# .config/config.json holds a live app key/secret - never commit.
+# Use config.example.json (repo root, tracked) as the template.
+.config/
 
-# Generated at runtime, user/session-specific - not source
-mowers.json
-state.json
-schedule.json
-track.jsonl
+# .data/ holds runtime-generated, user/session-specific state - not source.
+.data/

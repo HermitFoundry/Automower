@@ -4,17 +4,58 @@ static class Storage
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
-    private static string BaseDir => AppContext.BaseDirectory;
-    private static string ConfigPath => Path.Combine(BaseDir, "config.json");
-    private static string MowersPath => Path.Combine(BaseDir, "mowers.json");
-    private static string StatePath => Path.Combine(BaseDir, "state.json");
-    private static string SchedulePath => Path.Combine(BaseDir, "schedule.json");
+    // Anchored to the repo root (found by walking up from the running
+    // executable to the nearest .csproj), not the build output folder -
+    // AppContext.BaseDirectory is bin/<Config>/<TFM>/ and gets wiped by
+    // 'dotnet clean', which would otherwise silently discard config/state.
+    private static readonly string RepoRoot = FindRepoRoot();
+
+    private static string ConfigDir => Path.Combine(RepoRoot, ".config");
+    private static string DataDir => Path.Combine(RepoRoot, ".data");
+
+    private static string ConfigPath => Path.Combine(ConfigDir, "config.json");
+    private static string MowersPath => Path.Combine(DataDir, "mowers.json");
+    private static string StatePath => Path.Combine(DataDir, "state.json");
+    private static string SchedulePath => Path.Combine(DataDir, "schedule.json");
+
+    // One log file per mower - deliberately no combined view, per-mower is
+    // the only thing that's ever wanted.
+    public static string GetTrackLogPath(string mowerName)
+        => Path.Combine(DataDir, $"track-{SanitizeForFileName(mowerName)}.jsonl");
+
+    private static string SanitizeForFileName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var chars = name.Select(c => invalid.Contains(c) || c == ' ' ? '-' : c).ToArray();
+        var result = new string(chars);
+        while (result.Contains("--")) result = result.Replace("--", "-");
+        return result.Trim('-');
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            if (dir.GetFiles("*.csproj").Length > 0)
+            {
+                return dir.FullName;
+            }
+            dir = dir.Parent;
+        }
+        // No .csproj found walking up (e.g. a bare publish without source) -
+        // fall back to sitting next to the executable, as before.
+        return AppContext.BaseDirectory;
+    }
+
+    public static void EnsureDataDir() => Directory.CreateDirectory(DataDir);
 
     public static Config LoadConfig()
     {
         if (!File.Exists(ConfigPath))
         {
-            throw new FileNotFoundException($"Config file not found: {ConfigPath}");
+            throw new FileNotFoundException(
+                $"Config file not found: {ConfigPath}. Run 'config AppKey=... AppSecret=...' to create it.");
         }
 
         var config = JsonSerializer.Deserialize<Config>(File.ReadAllText(ConfigPath))
@@ -41,10 +82,16 @@ static class Storage
     }
 
     public static void SaveConfig(Config config)
-        => File.WriteAllText(ConfigPath, JsonSerializer.Serialize(config, JsonOptions));
+    {
+        Directory.CreateDirectory(ConfigDir);
+        File.WriteAllText(ConfigPath, JsonSerializer.Serialize(config, JsonOptions));
+    }
 
     public static void SaveMowers(IEnumerable<StoredMower> mowers)
-        => File.WriteAllText(MowersPath, JsonSerializer.Serialize(mowers, JsonOptions));
+    {
+        EnsureDataDir();
+        File.WriteAllText(MowersPath, JsonSerializer.Serialize(mowers, JsonOptions));
+    }
 
     public static List<StoredMower>? LoadMowers()
     {
@@ -53,7 +100,10 @@ static class Storage
     }
 
     public static void SaveState(ActiveState state)
-        => File.WriteAllText(StatePath, JsonSerializer.Serialize(state, JsonOptions));
+    {
+        EnsureDataDir();
+        File.WriteAllText(StatePath, JsonSerializer.Serialize(state, JsonOptions));
+    }
 
     public static ActiveState? LoadState()
     {
@@ -62,7 +112,10 @@ static class Storage
     }
 
     public static void SaveSchedules(Dictionary<string, MowerSchedule> schedules)
-        => File.WriteAllText(SchedulePath, JsonSerializer.Serialize(schedules, JsonOptions));
+    {
+        EnsureDataDir();
+        File.WriteAllText(SchedulePath, JsonSerializer.Serialize(schedules, JsonOptions));
+    }
 
     public static Dictionary<string, MowerSchedule> LoadSchedules()
     {

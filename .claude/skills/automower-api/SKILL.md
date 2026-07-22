@@ -8,55 +8,96 @@ version: 1.0.0
 
 Working knowledge for `C:\repos\automower`, a C# console app (`AutomowerConsole`,
 net10.0) that talks to the Husqvarna Automower Connect API. Run via `am.cmd
-<command> [args]` (forwards args with `%*`), or `dotnet run -- <command>`.
+<command> [args]` on Windows or `./am.sh <command> [args]` on Linux/macOS, or
+`dotnet run -- <command>` directly for quick one-offs. Also deployed to a
+Debian container on the user's QNAP TS-673A NAS for long-running `track`
+sessions; `migrate-to-dotfolders.sh` handles moving an older checkout's
+`bin/`-based config/data into `.config/`/`.data/`.
+
+**`am.cmd`/`am.sh` build once then launch `bin/Debug/net10.0/AutomowerConsole.dll`
+directly - deliberately not `dotnet run`.** Confirmed by direct incident on
+the Debian container: a `track` session started via `dotnet run` could not be
+stopped with Ctrl+C or `kill -INT <pid>` (nor `pkill -INT -f`); only
+`kill -9` worked. Root cause: `dotnet run` is a build-and-launch wrapper
+process, and it does not reliably forward POSIX signals to the child process
+it spawns - the `Console.CancelKeyPress` handler in `CommandTrack` is correct
+and was never the problem, the signal just never reached it. Never recommend
+`dotnet run` for anything long-running (`track` in particular); always the
+built binary via the shortcut scripts. Log data itself was never at risk
+either way, since `track` flushes each poll to disk immediately - the only
+casualty of the SIGKILL workaround was the graceful stop summary line.
 
 ## Project layout
 
 - `Program.cs` — CLI dispatch (top-level statements + local functions)
 - `HusqvarnaClient.cs` — auth + HTTP calls
 - `Models.cs` — JSON DTOs
-- `Storage.cs` — reads/writes `config.json`, `mowers.json`, `state.json`, `schedule.json`
+- `Storage.cs` — reads/writes `.config/config.json` and `.data/*.json(l)`
 - `ErrorCodes.cs` — full error code → description table
-- `config.json` — app key/secret + `track` interval settings; gitignored, holds a
-  live secret. `config.example.json` (tracked) is the placeholder template.
-- `mowers.json` / `state.json` / `schedule.json` — generated at runtime (mower cache,
-  active selection, cached per-mower calendar); also gitignored
+- `.config/config.json` — app key/secret + `track` interval settings; gitignored,
+  holds a live secret. `config.example.json` (repo root, tracked) is the
+  placeholder template.
+- `.data/mowers.json` / `.data/state.json` / `.data/schedule.json` — generated
+  at runtime (mower cache, active selection, cached per-mower calendar); also
+  gitignored
+- `.data/track-<sanitized mower name>.jsonl` — one append-only track log per
+  mower (see `Storage.GetTrackLogPath`/`SanitizeForFileName`), not a combined
+  log — deliberate, per explicit user request ("no need to see anything on
+  them together at all")
+
+**Both `.config/` and `.data/` are anchored to the repo root, not `bin/`.**
+`Storage.FindRepoRoot()` walks up from `AppContext.BaseDirectory` (which is
+`bin/<Config>/<TFM>/`) looking for the nearest `*.csproj`, falling back to
+`AppContext.BaseDirectory` itself if none is found (e.g. a bare publish
+without source alongside it). This exists specifically because `dotnet clean`
+deletes everything MSBuild tracked as build output — verified empirically:
+before this fix, `config.json` lived in `bin/` via a `CopyToOutputDirectory`
+csproj item, and a `clean` silently deleted it, then the next build
+re-copied a stale version from a since-removed repo-root source file,
+discarding any edits made only via `config` at runtime. `mowers.json` etc.
+were never csproj-tracked so `clean` never touched *them* even under the old
+layout, but they'd been sitting in the equally fragile `bin/` location
+anyway. Moving everything to `.config/`/`.data/` makes all of it immune to
+`clean`/rebuild by construction, not just the files that happened to
+survive before.
 
 Commands: `config`, `config Key=Value ...`, `list`, `use <name|id|index>`,
 `current`, `status [--all]`, `messages`, `errorcodes`, `workareas`,
 `workarea <name|id>`, `stayoutzones`, `schedule [mower]`,
 `track [seconds] [mower]`.
 
-`config` with no args prints current `config.json` (AppKey/AppSecret masked
-to first-4...last-4 chars); `config Key=Value ...` sets one or more fields via
+`config` with no args prints current values (AppKey/AppSecret masked to
+first-4...last-4 chars); `config Key=Value ...` sets one or more fields via
 reflection over the `Config` record in `Models.cs` (see `CommandConfig`) —
 any new field added to `Config` is automatically settable this way, no CLI
-wiring needed. It's also how `config.json` gets created in the first place
-(`Storage.LoadConfigForEditing()`, unlike `Storage.LoadConfig()`, doesn't
-require AppKey/AppSecret to already be set).
+wiring needed. It's also how `.config/config.json` gets created in the first
+place (`Storage.LoadConfigForEditing()`, unlike `Storage.LoadConfig()`,
+doesn't require AppKey/AppSecret to already be set).
 
 **Security history**: `config.json` with real credentials was accidentally
-committed in this repo's first commit. Fixed by deleting the branch ref
-(`git update-ref -d refs/heads/main` — safe since it was the only commit, no
-remote existed yet) rather than just `git rm --cached`, so the secret never
-existed in any reachable git history, not just future commits. If this ever
-happens again *after* a remote exists, deleting the ref won't be enough —
-history rewrite (or credential rotation) would be needed instead.
+committed in this repo's first commit (back when it lived at the repo root).
+Fixed by deleting the branch ref (`git update-ref -d refs/heads/main` — safe
+since it was the only commit, no remote existed yet) rather than just
+`git rm --cached`, so the secret never existed in any reachable git history,
+not just future commits. If this ever happens again *after* a remote exists,
+deleting the ref won't be enough — history rewrite (or credential rotation)
+would be needed instead.
 
 All mower-scoped commands (`status`, `messages`, `workareas`, `stayoutzones`,
 `schedule`, the trailing arg on `workarea <name|id>`, and the mower arg on
 `track`) accept an optional trailing `[mower]` override (name/id/list index)
 to target a different mower for one call without changing the persisted
-active selection in `state.json`. This goes through a shared
+active selection in `.data/state.json`. This goes through a shared
 `ResolveMowerAsync` helper in `Program.cs`.
 
 ### `track` — adaptive-interval polling with logging
 
 Polls `GET /mowers/{id}` and appends one JSON line per kept poll to
-`track.jsonl` in the app's base directory: `{timestamp, mowerId, mowerName,
-bytes, response}` where `response` is the full raw mower payload. Built to
-answer "how much data would a day of polling actually be" empirically
-instead of estimating — the log file's size on disk *is* the answer.
+`.data/track-<mower name>.jsonl` (one file per mower, e.g.
+`.data/track-AM430X-NERA.jsonl`): `{timestamp, mowerId, mowerName, bytes,
+response}` where `response` is the full raw mower payload. Built to answer
+"how much data would a day of polling actually be" empirically instead of
+estimating — a log file's size on disk *is* the answer, per mower.
 
 While the mower's `activity` is `CHARGING` or `PARKED_IN_CS` (see
 `IsAtCharger`) **and** it's not inside a scheduled window, only the first
@@ -84,15 +125,54 @@ Interval is chosen fresh every poll, in this priority order (see
    `activity` off the charger and self-upgrades to the fast interval, so
    detection lag is at most one idle interval.
 
-The schedule used for decision #1 comes from `schedule.json`, refreshed for
-free from every `track` poll's own `attributes.calendar` (the mower payload
-already includes it — no extra API call). `schedule.json` is a dict keyed by
+The schedule used for decision #1 comes from `.data/schedule.json`, refreshed
+for free from every `track` poll's own `attributes.calendar` (the mower
+payload already includes it — no extra API call). It's a dict keyed by
 mower id: `{mowerId: {MowerName, FetchedAt, Tasks}}`, where `Tasks` is the
 same `CalendarTask[]` shape used by `workarea`'s per-area schedule, but with
 `workAreaId` populated per task (confirmed present on the mower-level
 `GET /mowers/{id}` calendar too, not just the per-work-area endpoint). Run
 `schedule [mower]` standalone to force a refresh/inspect it without starting
 `track` (e.g. right after changing the schedule in the app).
+
+### `sessions` — summarizing a track log
+
+`sessions [mower]` (`CommandSessions`) reads `track-<mower>.jsonl` directly
+(no API call) and groups consecutive polls sharing the same
+`(activity, workAreaId)` pair into sessions - split on **either** changing,
+not just activity, since a mower can go straight from one work area into the
+next while `activity` stays `MOWING` the whole time (verified with a
+synthetic two-area sequence: correctly split into two sessions despite
+identical activity throughout). One line per session: date, start-end time,
+duration (`FormatDuration`, e.g. `1h32m`/`45m`), battery start%→end%
+(`DescribeActivity` maps the raw activity enum to a friendly label), and a
+`[work area name]` suffix resolved from that poll's own `workAreas[]` list
+(same shape as the mower-level `workAreas` embedded in `GET /mowers/{id}`;
+names are cached in a `Dictionary<long, string>` built while scanning, since
+not every line necessarily carries a fresh copy). Omitted when the id has no
+resolvable/non-empty name (e.g. `workAreaId: 0` with an empty-named default
+area, as seen on this account's AM405X, which has no named work areas
+configured). Purely local file parsing via `Storage.GetTrackLogPath(mowerName)`
+- `ResolveMowerAsync` is only used to turn a `[mower]` arg (or the active
+mower) into a name, not to call the API.
+
+**Session end = the next differing poll's timestamp, not the session's own
+last poll.** This is deliberate and matters most for charger stays: since
+`track` logs only the arrival poll and skips repeats while parked (see
+above), a whole charging/parked session is frequently a single JSONL line -
+using its own timestamp as both start and end would show a nonsensical
+0-duration session. Using the next poll's timestamp instead (whatever
+activity/work area that turns out to be) is the earliest point the log can
+actually confirm the state changed, at the cost of some imprecision bounded
+by whatever interval was active at the time (up to `IdleIntervalSeconds` or
+`NightIntervalSeconds`). The last session in the file has no "next" poll, so
+it prints `ongoing` and computes duration to `DateTimeOffset.Now` instead.
+
+Verified against synthetic datasets (overnight charging session spanning
+midnight, single-line Parked session between two Leaving/Mowing sessions,
+trailing ongoing Mowing session, and a two-work-area Mowing sequence that
+split correctly despite constant activity) before confirming against real
+(if sparse) local data - all cases behaved correctly.
 
 ## Authentication
 
@@ -210,4 +290,4 @@ Base URL: `https://api.amc.husqvarna.dev/v1`
 | AM430X NERA | Husqvarna Automower® 430X NERA  | 232802869 |
 | AM308V Nede | Automower® 308V                 | 260802646 |
 
-(Authoritative live copy is `mowers.json`, regenerated by `am list`.)
+(Authoritative live copy is `.data/mowers.json`, regenerated by `am list`.)

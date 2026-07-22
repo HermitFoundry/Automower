@@ -53,6 +53,9 @@ switch (command)
     case "schedule":
         await CommandSchedule(rest);
         break;
+    case "sessions":
+        await CommandSessions(rest);
+        break;
     case "help":
     case "-h":
     case "--help":
@@ -605,7 +608,8 @@ async Task CommandTrack(string[] trackArgs)
         ? int.Parse(intervalArg, CultureInfo.InvariantCulture)
         : config.ScheduledIntervalSeconds;
 
-    var logPath = Path.Combine(AppContext.BaseDirectory, "track.jsonl");
+    Storage.EnsureDataDir();
+    var logPath = Storage.GetTrackLogPath(mowerName);
     var api = GetClient();
     await api.AuthenticateAsync();
 
@@ -756,6 +760,129 @@ async Task CommandSchedule(string[] scheduleArgs)
     }
 }
 
+// Reads a mower's track-<mower>.jsonl and summarizes it into sessions: runs
+// of consecutive polls sharing the same (mower.activity, mower.workAreaId) -
+// split on either changing, since activity can stay MOWING across a switch
+// from one work area straight into the next. A session's end is the
+// timestamp of the *next* differing poll (not its own last poll), since
+// that's the earliest point we can confirm the state changed - this matters
+// most for charger stays, where 'track' only logs one poll on arrival and
+// then skips repeats, so a session can be a single log line whose real end
+// is only knowable from what comes after it.
+async Task CommandSessions(string[] sessionArgs)
+{
+    var resolved = await ResolveMowerAsync(sessionArgs.FirstOrDefault());
+    if (resolved is null) return;
+    var (_, mowerName) = resolved.Value;
+
+    var logPath = Storage.GetTrackLogPath(mowerName);
+    if (!File.Exists(logPath))
+    {
+        Console.WriteLine($"No track log found for {mowerName} at {logPath}.");
+        return;
+    }
+
+    var points = new List<(DateTimeOffset Time, string Activity, int Battery, long WorkAreaId)>();
+    var workAreaNames = new Dictionary<long, string>();
+    var skipped = 0;
+    foreach (var line in File.ReadLines(logPath))
+    {
+        if (string.IsNullOrWhiteSpace(line)) continue;
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            var timestamp = root.GetProperty("timestamp").GetDateTimeOffset();
+            var attributes = root.GetProperty("response").GetProperty("data").GetProperty("attributes");
+            var mowerObj = attributes.GetProperty("mower");
+            var activity = mowerObj.GetProperty("activity").GetString() ?? "UNKNOWN";
+            var workAreaId = mowerObj.TryGetProperty("workAreaId", out var waIdEl) ? waIdEl.GetInt64() : 0L;
+            var battery = attributes.GetProperty("battery").GetProperty("batteryPercent").GetInt32();
+            points.Add((timestamp, activity, battery, workAreaId));
+
+            if (attributes.TryGetProperty("workAreas", out var workAreasEl) && workAreasEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var wa in workAreasEl.EnumerateArray())
+                {
+                    if (wa.TryGetProperty("workAreaId", out var idEl) &&
+                        wa.TryGetProperty("name", out var nameEl) &&
+                        !string.IsNullOrWhiteSpace(nameEl.GetString()))
+                    {
+                        workAreaNames[idEl.GetInt64()] = nameEl.GetString()!.Trim();
+                    }
+                }
+            }
+        }
+        catch (Exception)
+        {
+            skipped++;
+        }
+    }
+
+    if (points.Count == 0)
+    {
+        Console.WriteLine($"Track log for {mowerName} has no readable records.");
+        return;
+    }
+
+    points.Sort((a, b) => a.Time.CompareTo(b.Time));
+
+    Console.WriteLine($"Sessions for {mowerName} (from {logPath}):");
+    var i = 0;
+    while (i < points.Count)
+    {
+        var activity = points[i].Activity;
+        var workAreaId = points[i].WorkAreaId;
+        var start = points[i].Time;
+        var batteryStart = points[i].Battery;
+
+        var j = i;
+        while (j + 1 < points.Count && points[j + 1].Activity == activity && points[j + 1].WorkAreaId == workAreaId)
+        {
+            j++;
+        }
+        var batteryEnd = points[j].Battery;
+        var end = j + 1 < points.Count ? points[j + 1].Time : (DateTimeOffset?)null;
+
+        var endLabel = end is null ? "ongoing" : end.Value.ToString("HH:mm", CultureInfo.InvariantCulture);
+        var duration = (end ?? DateTimeOffset.Now) - start;
+
+        var durationLabel = $"({FormatDuration(duration)})";
+        var workAreaLabel = workAreaNames.TryGetValue(workAreaId, out var waName) ? $"  [{waName}]" : "";
+        Console.WriteLine(
+            $"  {start:yyyy-MM-dd}  {DescribeActivity(activity),-11} {start:HH:mm}-{endLabel,-7} " +
+            $"{durationLabel,-9}  battery {batteryStart,3}% -> {batteryEnd,3}%{workAreaLabel}");
+
+        i = j + 1;
+    }
+
+    if (skipped > 0)
+    {
+        Console.WriteLine($"  ({skipped} malformed line(s) skipped)");
+    }
+}
+
+string DescribeActivity(string activity) => activity switch
+{
+    "MOWING" => "Mowing",
+    "CHARGING" => "Charging",
+    "PARKED_IN_CS" => "Parked",
+    "GOING_HOME" => "Going home",
+    "LEAVING" => "Leaving",
+    "STOPPED_IN_GARDEN" => "Stopped",
+    "NOT_APPLICABLE" => "N/A",
+    "UNKNOWN" => "Unknown",
+    _ => activity,
+};
+
+string FormatDuration(TimeSpan span)
+{
+    var totalMinutes = Math.Max(0, (int)span.TotalMinutes);
+    var hours = totalMinutes / 60;
+    var minutes = totalMinutes % 60;
+    return hours > 0 ? $"{hours}h{minutes:D2}m" : $"{minutes}m";
+}
+
 void PrintUsage()
 {
     Console.WriteLine("""
@@ -779,11 +906,16 @@ void PrintUsage()
           automower workarea <name|id> [mower]  Show detail for one work area (optionally for a specific mower)
           automower stayoutzones [mower]        Show stay-out zones (optionally for a specific mower)
           automower schedule [mower]            Show and refresh the cached schedule (schedule.json)
-          automower track [seconds] [mower]     Poll status adaptively and log to track.jsonl:
-                                                 fast (default 60s, [seconds] overrides) while active or
-                                                 in a scheduled window, else every 5 min in daytime, else
-                                                 every 30 min at night (22:00-08:00) - all configurable in
-                                                 config.json. Skips repeat polls while parked at the charger.
+          automower track [seconds] [mower]     Poll status adaptively and log to a per-mower
+                                                 track-<mower>.jsonl: fast (default 60s, [seconds]
+                                                 overrides) while active or in a scheduled window, else
+                                                 every 5 min in daytime, else every 30 min at night
+                                                 (22:00-08:00) - all configurable via 'config'. Skips
+                                                 repeat polls while parked at the charger.
+          automower sessions [mower]            Summarize track-<mower>.jsonl into one line per
+                                                 mowing/charging/etc. session (split on activity or
+                                                 work area changing): date, start-end time, duration,
+                                                 battery start% -> end%, and work area name
           automower help                        Show this help
         """);
 }
