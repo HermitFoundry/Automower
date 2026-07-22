@@ -52,8 +52,20 @@ compiled binary directly:
 
 ```
 am.cmd <command> [args]        # Windows
-./am.sh <command> [args]       # Linux/macOS - chmod +x am.sh once if needed
+./am.sh <command> [args]       # Linux/macOS
 ```
+
+On Linux/macOS, `am.sh` (and `migrate-to-dotfolders.sh`, below) need the
+executable bit set once per checkout — a fresh `git clone`/`git pull` won't
+carry it automatically on every system. If you get "Permission denied"
+trying to run `./am.sh`, this is why:
+
+```
+chmod +x am.sh migrate-to-dotfolders.sh
+```
+
+After that, `./am.sh <command>` works directly. If you'd rather not chmod
+anything, `bash am.sh <command>` works too without it.
 
 **Use the shortcuts, not `dotnet run`, for `track`.** `dotnet run` is a
 build-and-launch wrapper, and it does not reliably forward POSIX signals
