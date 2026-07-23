@@ -218,6 +218,16 @@ record MowerActivityState
     [JsonPropertyName("state")]
     public string State { get; init; } = "";
 
+    // Which work area the mower is currently in - absent while parked at the
+    // charger on some responses, present (and non-zero for a real named
+    // area) while mowing. Independent of Mode: aioautomower/Home Assistant's
+    // own integration tracks these as two separate attributes, not derived
+    // from one another - observed live data on this account shows Mode
+    // staying "MAIN_AREA" even while WorkAreaId points at a named, non-zero
+    // custom work area, so Mode is not a reliable stand-in for "which area".
+    [JsonPropertyName("workAreaId")]
+    public long? WorkAreaId { get; init; }
+
     [JsonPropertyName("inactiveReason")]
     public string InactiveReason { get; init; } = "";
 

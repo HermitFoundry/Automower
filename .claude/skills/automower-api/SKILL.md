@@ -40,7 +40,32 @@ written from documented tmux behavior and verified only where possible
 without tmux (mower-name/short-name extraction checked directly against the
 real `.data/mowers.json`, both scripts `bash -n`-checked for syntax, and the
 shortened-name resolution confirmed via a real `am.sh status AM430X` call -
-just not the tmux session lifecycle itself).
+just not the tmux session lifecycle itself). This gap turned out to matter:
+the first real run on the Debian container only reliably started 1 of 3
+sessions per invocation (had to run `startall.sh` twice to get all 3 up).
+
+**Root cause, confirmed by reasoning through the symptom (not directly
+reproduced, since no tmux here) - concurrent `dotnet build` races.**
+`tmux new-session -d` returns immediately without waiting for the launched
+command, so the original version's tight loop (one `tmux new-session ...
+am.sh track $short` per mower) could fire off up to 3 concurrent `am.sh`
+invocations - and `am.sh` runs `dotnet build` on *every* call, unconditionally.
+Concurrent builds against the same project's `obj`/`bin` output can race;
+the loser fails, `am.sh`'s `set -e` stops before ever reaching `exec dotnet
+... track`, and since that failed `am.sh` was the only process in its pane,
+the tmux session self-closes almost immediately after being created - looks
+exactly like "only one mower actually started" even though the script's own
+`echo` claimed all three did (it only reports that the `tmux new-session`
+*command itself* was issued, not that the process inside survived).
+
+**Fix**: `startall.sh` now builds once, up front (`dotnet build
+AutomowerConsole/AutomowerConsole.csproj`), and each tmux session runs the
+built `.dll` directly (`dotnet "$dir/AutomowerConsole/bin/Debug/net10.0/AutomowerConsole.dll"
+track "$short"`) instead of going through `am.sh` - eliminating the redundant
+per-session rebuild entirely rather than just narrowing the race window.
+Verified locally that the build-once step and running the `.dll` directly
+both work correctly (`dotnet current` via the built dll succeeded); the
+actual multi-session tmux behavior still needs confirming on the container.
 
 **Repo layout**: the console app lives in `AutomowerConsole/` (its own
 subfolder), with `automower.slnx` (solution file) plus `am.cmd`/`am.sh` at
@@ -507,6 +532,17 @@ Base URL: `https://api.amc.husqvarna.dev/v1`
 - The developer portal (`developer.husqvarnagroup.cloud/apis/automower-connect-api`)
   is a JS SPA — `WebFetch` only returns the page title, no usable content.
   Ground truth came from live `curl` calls against the real API instead.
+- `mower.mode` (`MAIN_AREA`/`SECONDARY_AREA`/`HOME`/`DEMO`/`POI`/`UNKNOWN`) is
+  **not** derived from `mower.workAreaId` and doesn't reliably tell you which
+  work area the mower is in — confirmed against this account's own track
+  logs, where `mode` stayed `MAIN_AREA` even while `workAreaId` pointed at a
+  named, non-default custom work area ("oversiden"). aioautomower/Home
+  Assistant's own integration treats them as two independent sensors (mode
+  vs. work_area_id), not one derived from the other. `mower.workAreaId` (a
+  field present in the raw API response but, until now, missing from
+  `MowerActivityState` in `Models.cs`) is the field to resolve against
+  `attributes.workAreas[]` for "what area is it actually in" — `status` now
+  prints a resolved `Work area:` line from it instead of relying on `Mode`.
 
 ## External references
 

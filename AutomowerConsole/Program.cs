@@ -220,6 +220,11 @@ async Task CommandStatus(string[] statusArgs)
     Console.WriteLine($"  State:      {a.Mower.State}");
     Console.WriteLine($"  Activity:   {a.Mower.Activity}");
     Console.WriteLine($"  Mode:       {a.Mower.Mode}");
+    if (a.Mower.WorkAreaId is { } currentWorkAreaId)
+    {
+        var workAreaName = (a.WorkAreas ?? []).FirstOrDefault(wa => wa.WorkAreaId == currentWorkAreaId)?.Name.Trim();
+        Console.WriteLine($"  Work area:  {workAreaName ?? currentWorkAreaId.ToString(CultureInfo.InvariantCulture)}");
+    }
     Console.WriteLine($"  Battery:    {a.Battery.BatteryPercent}%");
     Console.WriteLine($"  Next start: {nextStart}");
     if (a.Mower.InactiveReason != "NONE")

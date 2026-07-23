@@ -3,6 +3,18 @@
 # 'track' for that mower - see README's "Running track unattended" section
 # for why tmux (survives SSH/docker exec disconnects) and why per-mower
 # sessions (track only handles one mower per process).
+#
+# Builds once, up front, and each tmux session runs the built .dll directly
+# rather than going through am.sh - am.sh runs 'dotnet build' on every
+# invocation, and since 'tmux new-session -d' returns immediately (it
+# doesn't wait for the launched command to finish), a tight loop starting
+# one am.sh per mower can fire off several concurrent builds against the
+# same project. If two race for the same obj/bin output files, one can fail
+# to build; am.sh's 'set -e' then stops before ever exec'ing 'track', and
+# since that was the only process in the pane, its tmux session closes
+# itself almost immediately after being created - looks like "only one
+# mower started" even though the loop reported starting all of them.
+#
 # Uses just the model prefix of each mower's name (the part before the first
 # space, e.g. "AM430X" out of "AM430X NERA") as both the tmux session suffix
 # and the mower query passed to 'track' - shorter, and relies on the CLI's
@@ -24,9 +36,12 @@ if ! command -v tmux >/dev/null 2>&1; then
     exit 1
 fi
 
+dll="$dir/AutomowerConsole/bin/Debug/net10.0/AutomowerConsole.dll"
+dotnet build "$dir/AutomowerConsole/AutomowerConsole.csproj" -v quiet
+
 if [ ! -f .data/mowers.json ]; then
     echo "No cached mower list found - fetching..."
-    ./am.sh list
+    dotnet "$dll" list
 fi
 
 mapfile -t names < <(grep -o '"Name": *"[^"]*"' .data/mowers.json | sed -E 's/"Name": *"([^"]*)"/\1/')
@@ -45,7 +60,7 @@ for name in "${names[@]}"; do
         continue
     fi
 
-    tmux new-session -d -c "$dir" -s "$session" "$dir/am.sh" track "$short"
+    tmux new-session -d -c "$dir" -s "$session" dotnet "$dll" track "$short"
     echo "  started $session (track $short)"
 done
 
