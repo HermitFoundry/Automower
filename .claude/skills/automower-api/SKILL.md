@@ -11,7 +11,36 @@ net10.0) that talks to the Husqvarna Automower Connect API. Run via `am.cmd
 <command> [args]` on Windows or `./am.sh <command> [args]` on Linux/macOS, or
 `dotnet run -- <command>` directly for quick one-offs. Also deployed to a
 Debian container on the user's QNAP TS-673A NAS for long-running `track`
-sessions.
+sessions - `startall.sh`/`stopall.sh` (repo root) automate running one tmux
+`track` session per mower there (currently 3: AM405X, AM430X NERA, AM308V
+Nede) rather than doing the `tmux new -s ...`/Ctrl+C-per-session dance by
+hand for each. `startall.sh` discovers the mower list from `.data/mowers.json`
+(fetching it first via `am.sh list` if missing) rather than hardcoding the 3
+current mower names, so it stays correct if a mower is added/renamed/removed.
+
+Session naming and the mower query passed to `track` both use just the
+**model prefix** of each mower's name - `${name%% *}` in bash, e.g. "AM430X"
+out of "AM430X NERA" - relying on the CLI's existing name-contains matching
+(`MowerService.FindMower`) to resolve that shortened form back to the full
+mower (confirmed live: `am.sh status AM430X` correctly resolves to "AM430X
+NERA"). Deliberately not the full name: avoids a space ever reaching a tmux
+argument at all (no quoting workaround needed - an earlier version built
+each command as a `printf '%q '`-quoted string specifically to survive
+`AM430X NERA`'s space through tmux's `/bin/sh -c`; no longer needed once the
+argument itself has no space). **Only safe while each model prefix is
+unique across the account** (true for the current 3, one of each model) -
+if a second mower ever shared a prefix, this would need to fall back to the
+full name or the mower id instead, noted directly in `startall.sh`'s own
+comments too.
+
+**Not tested against real tmux** - tmux isn't installed on the Windows dev
+machine (confirmed: `which tmux` fails, `tmux -V` too), so the tmux
+orchestration itself (`new-session`, `send-keys`, `kill-session`) was
+written from documented tmux behavior and verified only where possible
+without tmux (mower-name/short-name extraction checked directly against the
+real `.data/mowers.json`, both scripts `bash -n`-checked for syntax, and the
+shortened-name resolution confirmed via a real `am.sh status AM430X` call -
+just not the tmux session lifecycle itself).
 
 **Repo layout**: the console app lives in `AutomowerConsole/` (its own
 subfolder), with `automower.slnx` (solution file) plus `am.cmd`/`am.sh` at
@@ -22,18 +51,43 @@ appeared alongside the `.csproj` at the repo root. `migrate-to-dotfolders.sh`
 `.config/`/`.data/`) was deleted as no-longer-needed once this move happened.
 
 **`AutomowerConsole.Tests/`** (sibling folder, NUnit, referenced by
-`automower.slnx`) exists but is intentionally empty - scaffolded, no tests
-written yet (explicitly deferred by the user, twice: once when the
+`automower.slnx`) - scaffolded empty at first (deferred twice: once when the
 `AutomowerConsole/` move was planned, once when the test project itself was
-created). `AutomowerConsole.csproj` has
-`<InternalsVisibleTo Include="AutomowerConsole.Tests" />` so tests can reach
-internal types (`Storage`, `AutomowerConnect`, etc. are all unmarked/default
-`internal`) without making anything public just for testability. Packages
-were bumped to latest via `dotnet outdated -u` right after scaffolding
-(NUnit 4.3.2→4.6.1, NUnit3TestAdapter 5.0.0→6.2.0, Microsoft.NET.Test.Sdk
-17.14.0→18.8.1, coverlet.collector 6.0.4→10.0.1, NUnit.Analyzers
-4.7.0→4.14.0, as of 2026-07-22) - re-run that whenever picking this back up
-if it's been a while, rather than assuming these stay current.
+created), now has its first real content:
+`TrackingServiceTests.cs` (`TrackingServiceAggregateDailyActivityTests`, 4
+tests, all passing) exercises `TrackingService.AggregateDailyActivity` - a
+pure, static method (deliberately extracted from `SummarizeDailyActivity`
+for exactly this reason: testable without a real track log file) - against
+a real 3-day `sessions` history from AM430X NERA (2026-07-21 through
+2026-07-23), reproduced as `TrackSession` fixture data rather than raw
+JSONL polls, since `sessions` output is what the user actually had on hand.
+One test specifically locks in the overnight-session/midnight-attribution
+behavior (`OvernightChargingSessionCountsEntirelyTowardItsStartDay`) using
+a real cross-midnight session from that history. `AutomowerConsole.csproj`
+has `<InternalsVisibleTo Include="AutomowerConsole.Tests" />` so tests can
+reach internal types (`TrackingService`, `TrackSession`, etc. are all
+unmarked/default `internal`) without making anything public just for
+testability - this is now actually exercised, not just wired up unused.
+Packages were bumped to latest via `dotnet outdated -u` right after
+scaffolding (NUnit 4.3.2→4.6.1, NUnit3TestAdapter 5.0.0→6.2.0,
+Microsoft.NET.Test.Sdk 17.14.0→18.8.1, coverlet.collector 6.0.4→10.0.1,
+NUnit.Analyzers 4.7.0→4.14.0, as of 2026-07-22) - re-run that whenever
+picking this back up if it's been a while, rather than assuming these stay
+current.
+
+**Domain nuance surfaced by the user while reviewing real session data,
+worth remembering even though no code changed**: the API's `activity` label
+for "at the charger" is not a reliable signal for whether real charging
+happened. A session literally labeled `CHARGING` can show flat
+battery start%→end% (single-poll sessions are common here, since `track`
+only logs the arrival poll and skips repeats while still parked - see
+`RunAsync`'s skip logic), and a `PARKED_IN_CS` session with flat battery can
+still represent real charging time that only becomes visible via a
+much-higher battery% on the *next* session. After walking through this, the
+user's own conclusion was explicitly **not** to attempt battery-delta-based
+accuracy - keep `CHARGING`/`PARKED_IN_CS` summed as one combined "at the
+charger" total (`IsAtCharger`), as `AggregateDailyActivity` already did. If
+this comes up again, that conclusion was reached, not skipped.
 
 **`am.cmd`/`am.sh` build once then launch `bin/Debug/net10.0/AutomowerConsole.dll`
 directly - deliberately not `dotnet run`.** Confirmed by direct incident on
@@ -321,6 +375,40 @@ extra API calls:
   different "next planned start" values (16:03 vs 11:00) despite an
   unchanged calendar, demonstrating the planner's live decision-making
   really does move independently of the static schedule.
+
+### `daily` — per-calendar-day activity rollup
+
+`daily [mower]` (`CommandDaily`) calls
+`TrackingService.SummarizeDailyActivity(mowerName)`, which itself calls
+`SummarizeSessions(mowerName, includeCalendarInfo: false)` and re-aggregates
+the returned `List<TrackSession>` by `DateOnly.FromDateTime(s.Start.Date)` -
+no separate log-parsing pass, fully reuses the existing session boundaries.
+Two buckets per day, matching exactly what was asked (not a general
+"activity type" system): Mowing, summed per work area
+(`DailyAccumulator.AddMowing` finds-or-creates by `WorkAreaName` including
+`null`, so an unresolved-name area still gets its own bucket rather than
+merging into whichever other unnamed area happened first) via a private
+nested `DailyAccumulator` class; and Charging, one combined total via
+`TrackingService.IsAtCharger` (`CHARGING` + `PARKED_IN_CS` together - no
+finer split). Sessions in neither bucket (`GOING_HOME`, `LEAVING`,
+`STOPPED_IN_GARDEN`, ...) are silently dropped from the rollup - not an
+oversight, just outside what was requested. Days that end up with neither
+bucket populated (e.g. the only session that day was a 5-minute `Leaving`)
+are filtered out of the result rather than printed as a blank line.
+
+**Whole session → start day, no midnight-splitting** - same simplification
+`SummarizeSessions` already makes for its own single date column, carried
+through rather than added on top. Confirmed via live data this produces a
+Charging total **exceeding 24h** for an in-progress `Parked` session that
+started the afternoon before and is still ongoing as of "now" (real:
+`24h35m` shown under the start day) - not a bug, just what "count the whole
+session under its start day" necessarily means once a session has run past
+midnight. Flagged to the user directly rather than silently shipped, since
+at a glance it reads as broken. Verified against a synthetic 2-day, 2-work-area
+dataset that the actually-requested behavior is correct: same-day, same-area
+mowing sessions sum together (two visits to "Front Lawn" totaling 50m,
+verified by hand against the source timestamps) rather than appearing as
+duplicate line entries.
 
 ### `calendar` vs `planner`
 

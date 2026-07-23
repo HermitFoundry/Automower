@@ -98,6 +98,7 @@ selection.
 | `schedule [mower]` | Show the calendar, refresh `.data/schedule.json`, and show the live next calendar/planned start |
 | `track [seconds] [mower]` | Adaptive-interval polling with logging to a per-mower `.data/track-<mower>.jsonl` (see below) |
 | `sessions [--calendar] [mower]` | Summarize a mower's track log into one line per mowing/charging/etc. session (see below) |
+| `daily [mower]` | One line per calendar day: total Mowing time per work area, then total Charging time (see below) |
 | `help` | Show usage |
 
 ### Examples
@@ -202,6 +203,36 @@ is needed — see **`calendar` vs `planner`** below for what each one means):
   2026-07-22  Parked      13:02-ongoing (7h05m)    battery  95% ->  95%  next calendar start: 2026-07-23 09:00   next planned start: 2026-07-22 16:03
 ```
 
+### `daily`: activity totals per calendar day
+
+`daily [mower]` rolls `sessions`' output up by day: total **Mowing** time per
+work area that day (repeated on the line for each additional area worked,
+summed together if the same area was mowed more than once that day), then a
+single combined **Charging** total last — charging isn't tied to a work
+area, so it's outside that list rather than part of it:
+
+```
+Daily activity for AM405X (newest first, from .data/track-AM405X.jsonl):
+  2026-07-21  Mowing 50m [Front Lawn]   Mowing 30m [Back Yard]   Charging 21h15m
+  2026-07-20  Mowing 1h00m [Front Lawn]   Mowing 45m [Back Yard]   Charging 21h15m
+```
+
+`Charging` combines `CHARGING` and `PARKED_IN_CS` into one "time spent at
+the charger" total. Days with only charging (or only mowing) simply omit the
+other half of the line. Other activities (`Going home`, `Leaving`,
+`Stopped`, ...) aren't represented — only the two totals that were asked for.
+
+**A session counts entirely toward the day it *started*** — same
+simplification `sessions` already makes for its own single date column, not
+something `daily` adds on top. This matters most for an *ongoing* session:
+if the mower has been parked at the charger since yesterday afternoon and
+still is, that entire (and growing) duration shows up under yesterday's
+date, which can legitimately read as more than 24 hours — that's real
+elapsed time for one continuous session, not a bug. Splitting a
+session's duration across the midnight boundary it crosses would be more
+literally accurate but adds real complexity; not done unless it turns out
+to matter in practice.
+
 ### `calendar` vs `planner`
 
 Two related but different things show up throughout this tool:
@@ -265,6 +296,25 @@ time (`tmux new -s automower-405x`, etc. — see **Commands** for the
   `kill -9` fallback further up: your log data is still safe (flushed
   after every poll), you just won't get the clean summary line.
 
+**`startall.sh` / `stopall.sh`** automate the above for every mower on the
+account at once (one tmux session per mower, named `automower-<model
+prefix>` — the part of the mower's name before the first space, e.g.
+`automower-AM430X` for "AM430X NERA" — relying on the CLI's existing
+name-contains matching to resolve that shortened form back to the full
+mower; only safe while each model prefix is unique across the account, true
+for the current 3):
+
+```
+./startall.sh   # one detached tmux session per mower, each running 'track'
+./stopall.sh    # Ctrl+C into each session so 'track' stops gracefully,
+                 # force-kills anything still around after a few seconds
+```
+
+`startall.sh` fetches the mower list first if `.data/mowers.json` doesn't
+exist yet, and skips any mower whose session is already running rather than
+starting a duplicate — safe to re-run. Check on things afterward the normal
+tmux way (`tmux ls`, `tmux attach -t automower-<mower name>`).
+
 ## Config and generated files
 
 Both live in the repo root, resolved at runtime by walking up from the built
@@ -290,9 +340,9 @@ placeholder template to copy from if you ever need to recreate it by hand;
 ## Project layout
 
 The console app lives in its own `AutomowerConsole/` subfolder, with a
-sibling `AutomowerConsole.Tests/` (NUnit, no tests written yet — scaffolding
-only) referencing it via `InternalsVisibleTo`, and `am.cmd`, `am.sh`, and
-`automower.slnx` at the repo root:
+sibling `AutomowerConsole.Tests/` (NUnit) referencing it via
+`InternalsVisibleTo`, and `am.cmd`, `am.sh`, and `automower.slnx` at the
+repo root. Run the tests with `dotnet test`.
 
 - `AutomowerConsole/Program.cs` — CLI entry point, argument parsing, and
   result printing
@@ -318,12 +368,13 @@ only) referencing it via `InternalsVisibleTo`, and `am.cmd`, `am.sh`, and
   projects are added) that they're anchored to
 - `AutomowerConsole/ErrorCodes.cs` — full Automower error code → description
   table
-- `AutomowerConsole.Tests/AutomowerConsole.Tests.csproj` — NUnit test
-  project (empty for now); `AutomowerConsole.csproj` grants it access to
-  internal types via `<InternalsVisibleTo>`
+- `AutomowerConsole.Tests/` — NUnit test project; `AutomowerConsole.csproj`
+  grants it access to internal types via `<InternalsVisibleTo>`
 - `automower.slnx` — solution file referencing both projects
 - `am.cmd` / `am.sh` — shortcuts that build `AutomowerConsole.csproj` once
   and then run the compiled `.dll` directly (not `dotnet run` — see above)
+- `startall.sh` / `stopall.sh` — start/stop one tmux `track` session per
+  mower (see **Running `track` unattended** above)
 
 For API implementation notes (auth flow, endpoint quirks, timestamp units,
 external references) see `.claude/skills/automower-api/SKILL.md`.

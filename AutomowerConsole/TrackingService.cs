@@ -230,6 +230,81 @@ internal class TrackingService(ScheduleService schedule)
 
         return sessions;
     }
+
+    // Rolls SummarizeSessions' output up by calendar day. Thin wrapper around
+    // the pure AggregateDailyActivity below - kept separate so the
+    // aggregation itself is unit-testable without needing a real track log
+    // file (see AutomowerConsole.Tests/TrackingServiceTests.cs, built from a
+    // real 3-day session history).
+    public List<DailyActivity> SummarizeDailyActivity(string mowerName)
+        => AggregateDailyActivity(SummarizeSessions(mowerName, includeCalendarInfo: false));
+
+    // Pure: total mowing time per work area per day (summed if the same area
+    // was mowed more than once that day), plus one combined charging total
+    // per day (CHARGING and PARKED_IN_CS together - "time spent at the
+    // charger", not the finer distinction between actively charging and
+    // sitting there already full; a real mower's own activity label for
+    // this is inconsistent - sometimes it's plainly "Charging", sometimes a
+    // "Parked" session with flat reported battery turns out to have charged
+    // anyway, only visible via a much-higher battery% on the *next* session -
+    // not attempted here, kept as the simple combined sum by design).
+    // Sessions that don't fit either bucket (Going home, Leaving, Stopped,
+    // ...) are not represented - only Mowing and Charging were asked for. A
+    // session is attributed entirely to its *start* day, same simplification
+    // 'sessions' itself makes for its single date column - an overnight
+    // charge isn't split across the two days it actually spans. Returned
+    // newest day first, matching 'sessions'.
+    public static List<DailyActivity> AggregateDailyActivity(IEnumerable<TrackSession> sessions)
+    {
+        var byDay = new SortedDictionary<DateOnly, DailyAccumulator>();
+
+        foreach (var s in sessions.OrderBy(s => s.Start))
+        {
+            var day = DateOnly.FromDateTime(s.Start.Date);
+            var duration = (s.End ?? DateTimeOffset.Now) - s.Start;
+
+            if (!byDay.TryGetValue(day, out var acc))
+            {
+                acc = new DailyAccumulator();
+                byDay[day] = acc;
+            }
+
+            if (IsAtCharger(s.Activity))
+            {
+                acc.Charging += duration;
+            }
+            else if (s.Activity == "MOWING")
+            {
+                acc.AddMowing(s.WorkAreaName, duration);
+            }
+        }
+
+        var result = byDay
+            .Where(kv => kv.Value.Mowing.Count > 0 || kv.Value.Charging > TimeSpan.Zero)
+            .Select(kv => new DailyActivity(kv.Key, kv.Value.Mowing, kv.Value.Charging))
+            .ToList();
+        result.Reverse();
+        return result;
+    }
+
+    private class DailyAccumulator
+    {
+        public List<WorkAreaTime> Mowing { get; } = [];
+        public TimeSpan Charging;
+
+        public void AddMowing(string? workAreaName, TimeSpan duration)
+        {
+            var index = Mowing.FindIndex(m => m.WorkAreaName == workAreaName);
+            if (index >= 0)
+            {
+                Mowing[index] = Mowing[index] with { Duration = Mowing[index].Duration + duration };
+            }
+            else
+            {
+                Mowing.Add(new WorkAreaTime(workAreaName, duration));
+            }
+        }
+    }
 }
 
 internal record TrackSession(
@@ -241,3 +316,7 @@ internal record TrackSession(
     string? WorkAreaName,
     DateTimeOffset? NextCalendarStart,
     DateTimeOffset? NextPlannedStart);
+
+internal record DailyActivity(DateOnly Date, List<WorkAreaTime> Mowing, TimeSpan Charging);
+
+internal record WorkAreaTime(string? WorkAreaName, TimeSpan Duration);

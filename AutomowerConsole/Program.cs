@@ -64,6 +64,9 @@ switch (command)
     case "sessions":
         await CommandSessions(rest);
         break;
+    case "daily":
+        await CommandDaily(rest);
+        break;
     case "help":
     case "-h":
     case "--help":
@@ -539,6 +542,38 @@ async Task CommandSessions(string[] sessionArgs)
     }
 }
 
+// One line per calendar day: total Mowing time per work area that day
+// (repeated on the line for each additional area, summed if the same area
+// was mowed more than once), then a single combined Charging total last -
+// charging isn't tied to a work area, so it's outside that list, not part
+// of it. See TrackingService.SummarizeDailyActivity for the day-attribution
+// and CHARGING/PARKED_IN_CS-combining rules.
+async Task CommandDaily(string[] dailyArgs)
+{
+    var resolved = await mowerService.ResolveMowerAsync(dailyArgs.FirstOrDefault());
+    if (resolved is null) return;
+    var (_, mowerName) = resolved.Value;
+
+    var days = trackingService.SummarizeDailyActivity(mowerName);
+    if (days.Count == 0) return;
+
+    Console.WriteLine($"Daily activity for {mowerName} (newest first, from {Storage.GetTrackLogPath(mowerName)}):");
+    foreach (var day in days)
+    {
+        var parts = day.Mowing.Select(m => m.WorkAreaName is null
+            ? $"Mowing {m.Duration.FormatDuration()}"
+            : $"Mowing {m.Duration.FormatDuration()} [{m.WorkAreaName}]").ToList();
+
+        if (day.Charging > TimeSpan.Zero)
+        {
+            parts.Add($"Charging {day.Charging.FormatDuration()}");
+        }
+
+        var date = day.Date.ToDateTime(TimeOnly.MinValue).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        Console.WriteLine($"  {date}  {string.Join("   ", parts)}");
+    }
+}
+
 string DescribeActivity(string activity) => activity switch
 {
     "MOWING" => "Mowing",
@@ -589,6 +624,9 @@ void PrintUsage()
                                                  battery start% -> end%, and work area name. --calendar
                                                  adds the next calendar/planned start (as of that poll)
                                                  under each Charging/Parked session
+          automower daily [mower]                One line per calendar day: total Mowing time per work
+                                                 area that day (repeated per area), then total Charging
+                                                 time for the day
           automower help                        Show this help
         """);
 }
