@@ -64,8 +64,31 @@ built `.dll` directly (`dotnet "$dir/AutomowerConsole/bin/Debug/net10.0/Automowe
 track "$short"`) instead of going through `am.sh` - eliminating the redundant
 per-session rebuild entirely rather than just narrowing the race window.
 Verified locally that the build-once step and running the `.dll` directly
-both work correctly (`dotnet current` via the built dll succeeded); the
-actual multi-session tmux behavior still needs confirming on the container.
+both work correctly (`dotnet current` via the built dll succeeded).
+
+**This fixed the build race but not the underlying symptom** - a real run on
+the container still only kept 1 of 3 sessions up (`tmux ls` showed only
+`automower-AM405X`, moments after `startall` reported starting all three).
+Since the build race is eliminated, this has to be a different, still
+unconfirmed failure - something in `track` itself throwing early for
+2 of 3 mowers (unhandled exception, auth, a file-write collision on the
+shared `.data/schedule.json`, ...). The structural problem is the same
+either way: `tmux new-session -d ... dotnet "$dll" track "$short"` runs the
+`.dll` as the pane's only process with nowhere for its output to go, so a
+fast crash closes the pane before there's any chance to attach and see why
+- "only one started" with no error message to explain the other two.
+
+**Mitigation (not yet a root-cause fix)**: each session's stdout+stderr is
+now redirected to `.data/startall-<short>.log` (`bash -c "dotnet '$dll'
+track '$short' > '$log' 2>&1"` in place of the bare `dotnet ... track`
+command), so a fast crash is diagnosable after the fact via `cat
+.data/startall-AM430X.log` instead of needing to reproduce it by running
+the same command in the foreground by hand. Deliberately not also `tee`ing
+to the pane / keeping the pane open after exit - that would change what a
+*clean* stop looks like too, breaking `stopall.sh`'s "closes itself within
+3s" detection for a graceful Ctrl+C stop. **Next real diagnostic step**:
+re-run `startall`, then read whichever of `.data/startall-AM430X.log` /
+`.data/startall-AM308V.log` exist, to find the actual exception.
 
 **Repo layout**: the console app lives in `AutomowerConsole/` (its own
 subfolder), with `automower.slnx` (solution file) plus `am.cmd`/`am.sh` at
