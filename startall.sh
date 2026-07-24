@@ -51,6 +51,8 @@ if [ ${#names[@]} -eq 0 ]; then
     exit 1
 fi
 
+mkdir -p "$dir/.data"
+
 for name in "${names[@]}"; do
     short="${name%% *}"
     session="automower-$short"
@@ -60,8 +62,18 @@ for name in "${names[@]}"; do
         continue
     fi
 
-    tmux new-session -d -c "$dir" -s "$session" dotnet "$dll" track "$short"
-    echo "  started $session (track $short)"
+    # stdout+stderr redirected to a per-mower log - if 'track' crashes fast
+    # (bad auth, an unhandled exception, ...) the tmux pane closes almost
+    # instantly (it's the only process in it), too fast to attach and read
+    # anything live. The log survives that, so the failure is diagnosable
+    # after the fact with 'cat .data/startall-<short>.log' instead of having
+    # to reproduce it by running the same command in the foreground by hand.
+    # Deliberately not using 'tee'/keeping the pane open after exit - that
+    # would also change what a *clean* stop looks like, breaking stopall.sh's
+    # "closes itself within 3s" detection for a graceful Ctrl+C stop.
+    log="$dir/.data/startall-$short.log"
+    tmux new-session -d -c "$dir" -s "$session" bash -c "dotnet '$dll' track '$short' > '$log' 2>&1"
+    echo "  started $session (track $short, log: $log)"
 done
 
 echo "Done. 'tmux ls' to see them; 'tmux attach -t <name>' to check on one; ./stopall.sh to stop them all."
