@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
-using AutomowerConsole;
+using AutomowerConsole.Core;
 
 if (args.Length == 0)
 {

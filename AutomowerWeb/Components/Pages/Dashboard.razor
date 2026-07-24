@@ -1,0 +1,160 @@
+@page "/"
+@inject MowerService MowerService
+@inject MowerDetailService MowerDetailService
+@inject TrackingService TrackingService
+
+<PageTitle>Automower Dashboard</PageTitle>
+
+<div class="page-header">
+    <h1>🌱 Mower Dashboard</h1>
+    <button class="btn-refresh" @onclick="LoadAsync" disabled="@_loading">
+        @(_loading ? "Refreshing…" : "🔄 Refresh")
+    </button>
+</div>
+
+@if (_error is not null)
+{
+    <p class="banner banner-error">⚠️ @_error</p>
+}
+
+@if (_loading && _cards.Count == 0)
+{
+    <p class="muted">Loading live status…</p>
+}
+else if (_cards.Count == 0 && _error is null)
+{
+    <p class="muted">No mowers found. Run <code>list</code> from the CLI first.</p>
+}
+
+<div class="mower-grid">
+    @foreach (var card in _cards)
+    {
+        <div class="mower-card @MowerDisplay.StatusClass(card.Activity, card.Connected)">
+            <div class="mower-card-header">
+                <span class="mower-icon">@MowerDisplay.Icon(card.Activity, card.Connected)</span>
+                <h2>@card.Name</h2>
+            </div>
+
+            <dl class="mower-facts">
+                <dt>Activity</dt>
+                <dd>@MowerDisplay.Label(card.Activity)</dd>
+                <dt>Battery</dt>
+                <dd>@BatteryLabel(card.BatteryPercent)</dd>
+                <dt>Work area</dt>
+                <dd>@(card.WorkAreaName ?? "—")</dd>
+                <dt>Connected</dt>
+                <dd>@(card.Connected ? "✅ yes" : "❌ no")</dd>
+                <dt>Next start</dt>
+                <dd>@card.NextStartLabel</dd>
+            </dl>
+
+            <h3>📅 Today</h3>
+            @if (card.TodaySessions.Count == 0)
+            {
+                <p class="muted small">No activity logged today yet.</p>
+            }
+            else
+            {
+                <ul class="session-list">
+                    @foreach (var s in card.TodaySessions)
+                    {
+                        <li>
+                            <span>@MowerDisplay.Icon(s.Activity, true)</span>
+                            <span>@s.Start.ToString("HH:mm")–@(s.End?.ToString("HH:mm") ?? "now")</span>
+                            <span class="muted">(@SessionDuration(s).FormatDuration())</span>
+                            @if (s.WorkAreaName is not null)
+                            {
+                                <span class="muted">[@s.WorkAreaName]</span>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+
+            <a class="details-link" href="@($"/mower/{Uri.EscapeDataString(card.Name)}")">More details →</a>
+        </div>
+    }
+</div>
+
+@code {
+    private List<MowerCard> _cards = [];
+    private bool _loading = true;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    // Deliberately no auto-refresh timer here - see AutomowerConsole's
+    // SKILL.md on Husqvarna's "simultaneous.logins" auth rejection. This
+    // process is a 4th independent consumer of the same app key/secret
+    // alongside the 3 'track' processes; a background poll timer would add
+    // another recurring source of auth traffic for a dashboard nobody's
+    // continuously staring at. Loads once on first render, otherwise only
+    // on an explicit click.
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        StateHasChanged();
+
+        try
+        {
+            var mowers = await MowerService.EnsureMowersAsync();
+            var cards = new List<MowerCard>();
+
+            foreach (var mower in mowers)
+            {
+                var detail = await MowerDetailService.GetMowerDetailAsync(mower.Id);
+                var a = detail.Attributes;
+
+                var workAreaName = a.Mower.WorkAreaId is { } workAreaId
+                    ? (a.WorkAreas ?? []).FirstOrDefault(w => w.WorkAreaId == workAreaId)?.Name.Trim()
+                    : null;
+
+                var nextStart = a.Planner.NextStartTimestamp > 0
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(a.Planner.NextStartTimestamp).ToLocalTime().ToString("MMM d, HH:mm")
+                    : "not scheduled";
+
+                var sessions = TrackingService.SummarizeSessions(mower.Name, includeCalendarInfo: false);
+                var today = sessions.Where(s => s.Start.Date == DateTimeOffset.Now.Date).ToList();
+
+                cards.Add(new MowerCard(
+                    mower.Name,
+                    a.Mower.Activity,
+                    a.Metadata.Connected,
+                    a.Battery.BatteryPercent,
+                    workAreaName,
+                    nextStart,
+                    today));
+            }
+
+            _cards = cards;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Couldn't load live status: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private static TimeSpan SessionDuration(TrackSession s) => (s.End ?? DateTimeOffset.Now) - s.Start;
+
+    private static string BatteryLabel(int percent) => percent switch
+    {
+        >= 60 => $"🔋 {percent}%",
+        >= 25 => $"🪫 {percent}%",
+        _ => $"🪫 {percent}% (low)",
+    };
+
+    private record MowerCard(
+        string Name,
+        string Activity,
+        bool Connected,
+        int BatteryPercent,
+        string? WorkAreaName,
+        string NextStartLabel,
+        List<TrackSession> TodaySessions);
+}

@@ -1,10 +1,10 @@
-namespace AutomowerConsole;
+namespace AutomowerConsole.Core;
 
 // A specific, already-resolved mower's live detail data - status, raw JSON,
 // messages, single work-area detail. Distinct from MowerService, which
 // handles the mower list/resolve concern (which mower are we talking about),
 // not a specific mower's live data.
-internal class MowerDetailService
+public class MowerDetailService
 {
     public Task<MowerData> GetMowerDetailAsync(string mowerId) => AutomowerConnect.Instance.GetMowerAsync(mowerId);
 

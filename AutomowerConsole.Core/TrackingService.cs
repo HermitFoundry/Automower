@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Globalization;
 
-namespace AutomowerConsole;
+namespace AutomowerConsole.Core;
 
 // Reads and writes the per-mower track-<mower>.jsonl log: the live polling
 // loop ('track') and the historical session summary ('sessions'). Both
@@ -10,8 +10,8 @@ namespace AutomowerConsole;
 // during RunAsync (same accepted-Console-output pattern as
 // MowerService.ResolveMowerAsync - it's feedback intrinsic to the operation,
 // not a separate presentation layer) but SummarizeSessions returns data;
-// Program.cs still does that command's line formatting/printing.
-internal class TrackingService(ScheduleService schedule)
+// callers (CLI or web) do their own presentation on top.
+public class TrackingService(ScheduleService schedule)
 {
     // Activity values that mean "sitting at the charging station", as opposed to
     // actually out in the garden. Used to suppress repeat polls while parked.
@@ -353,7 +353,7 @@ internal class TrackingService(ScheduleService schedule)
     }
 }
 
-internal record TrackSession(
+public record TrackSession(
     DateTimeOffset Start,
     DateTimeOffset? End,
     string Activity,
@@ -372,6 +372,6 @@ internal record TrackSession(
     // finished" fact.
     DateTimeOffset? ChargeCompleteAt = null);
 
-internal record DailyActivity(DateOnly Date, List<WorkAreaTime> Mowing, TimeSpan Charging, TimeSpan Full);
+public record DailyActivity(DateOnly Date, List<WorkAreaTime> Mowing, TimeSpan Charging, TimeSpan Full);
 
-internal record WorkAreaTime(string? WorkAreaName, TimeSpan Duration);
+public record WorkAreaTime(string? WorkAreaName, TimeSpan Duration);

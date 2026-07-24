@@ -6,10 +6,21 @@ version: 1.0.0
 
 # Automower Connect API notes
 
-Working knowledge for `C:\repos\automower`, a C# console app (`AutomowerConsole`,
-net10.0) that talks to the Husqvarna Automower Connect API. Run via `am.cmd
-<command> [args]` on Windows or `./am.sh <command> [args]` on Linux/macOS, or
-`dotnet run -- <command>` directly for quick one-offs. Also deployed to a
+Working knowledge for `C:\repos\automower`, a 4-project net10.0 solution
+(`automower.slnx`) talking to the Husqvarna Automower Connect API:
+`AutomowerConsole.Core` (shared domain/service layer - `MowerService`,
+`MowerDetailService`, `ScheduleService`, `TrackingService`, `AutomowerConnect`,
+`Storage`, `Models`, etc., all `public` except `AutomowerConnect`/
+`HusqvarnaClient`/wire-DTOs which stay `internal` to Core - nothing outside
+Core should reach the API directly), `AutomowerConsole` (the CLI, just
+`Program.cs` on top of Core), `AutomowerConsole.Tests` (NUnit, tests Core
+directly), and `AutomowerWeb` (a read-only Blazor Server dashboard, also on
+top of Core - see README's "Web dashboard" section for what it shows and
+how to run it; `dotnet run --project AutomowerWeb`). The CLI and the web app
+are two independent presentation layers over the same Core, neither depends
+on the other. Run the CLI via `am.cmd <command> [args]` on Windows or
+`./am.sh <command> [args]` on Linux/macOS, or `dotnet run --project
+AutomowerConsole -- <command>` directly for quick one-offs. Also deployed to a
 Debian container on the user's QNAP TS-673A NAS for long-running `track`
 sessions - `startall.sh`/`stopall.sh` (repo root) automate running one tmux
 `track` session per mower there (currently 3: AM405X, AM430X NERA, AM308V
@@ -129,11 +140,15 @@ a real 3-day `sessions` history from AM430X NERA (2026-07-21 through
 JSONL polls, since `sessions` output is what the user actually had on hand.
 One test specifically locks in the overnight-session/midnight-attribution
 behavior (`OvernightChargingSessionCountsEntirelyTowardItsStartDay`) using
-a real cross-midnight session from that history. `AutomowerConsole.csproj`
-has `<InternalsVisibleTo Include="AutomowerConsole.Tests" />` so tests can
-reach internal types (`TrackingService`, `TrackSession`, etc. are all
-unmarked/default `internal`) without making anything public just for
-testability - this is now actually exercised, not just wired up unused.
+a real cross-midnight session from that history. Originally reached
+`TrackingService`/`TrackSession` (then `internal` in `AutomowerConsole`) via
+`<InternalsVisibleTo Include="AutomowerConsole.Tests" />` - superseded by
+the `AutomowerConsole.Core` extraction (see top of this doc), where
+`TrackingService` and friends are genuinely `public` now that a second real
+consumer (`AutomowerWeb`) needs them too; the tests project just references
+`AutomowerConsole.Core` directly, no `InternalsVisibleTo` needed for this
+particular class anymore (Core still grants it to
+`AutomowerConsole.Tests` for the handful of types that stayed `internal`).
 Packages were bumped to latest via `dotnet outdated -u` right after
 scaffolding (NUnit 4.3.2→4.6.1, NUnit3TestAdapter 5.0.0→6.2.0,
 Microsoft.NET.Test.Sdk 17.14.0→18.8.1, coverlet.collector 6.0.4→10.0.1,

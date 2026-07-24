@@ -1,0 +1,27 @@
+@inject MowerService MowerService
+
+<nav class="nav-menu">
+    <a class="nav-brand" href="/">🌱 Automower</a>
+    <a href="/">Dashboard</a>
+    @foreach (var mower in _mowers)
+    {
+        <a href="@($"/mower/{Uri.EscapeDataString(mower.Name)}")">@mower.Name</a>
+    }
+</nav>
+
+@code {
+    private List<StoredMower> _mowers = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _mowers = await MowerService.EnsureMowersAsync();
+        }
+        catch
+        {
+            // No config.json / no cached mowers.json yet - nav just shows
+            // the Dashboard link, which will surface the real error itself.
+        }
+    }
+}

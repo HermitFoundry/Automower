@@ -41,9 +41,11 @@ adaptive polling/logging mode (`track`).
 
    The config file lives in `.config/config.json`, and `list`/`use`/`track`
    generate state in `.data/` — both are resolved relative to the repo root
-   (found by walking up from the built executable to the nearest `.csproj`),
+   (found by walking up from the built executable to the nearest `.slnx`),
    not the `bin/` build output folder, so `dotnet clean` never touches them.
    Both directories are gitignored — keep it that way (see **Security note**).
+   `AutomowerWeb` (see **Web dashboard**) reads the same two directories, so
+   it needs to run somewhere that can see them too.
 
 ## Running
 
@@ -61,16 +63,14 @@ am.cmd <command> [args]        # Windows
 ./am.sh <command> [args]       # Linux/macOS
 ```
 
-On Linux/macOS, `am.sh` needs the executable bit set once per checkout — a
-fresh `git clone`/`git pull` won't carry it automatically on every system.
-If you get "Permission denied" trying to run `./am.sh`, this is why:
-
-```
-chmod +x am.sh
-```
-
-After that, `./am.sh <command>` works directly. If you'd rather not chmod
-anything, `bash am.sh <command>` works too without it.
+On Linux/macOS, `am.sh`/`startall.sh`/`stopall.sh`/`bootstrap.sh` need the
+executable bit, which git now tracks directly (`git update-index --chmod=+x`
+was applied and committed) — a fresh `git clone` on Linux gets it for free.
+If an *existing* checkout still loses it after a pull (some git configs,
+e.g. `core.fileMode=false`, won't restore local bits from the index), run
+`./fix-permissions.sh` to reset all of this repo's `*.sh` scripts at once,
+or `chmod +x am.sh` for just the one. If you'd rather not chmod anything,
+`bash am.sh <command>` works too without it.
 
 **Use the shortcuts, not `dotnet run`, for `track`.** `dotnet run` is a
 build-and-launch wrapper, and it does not reliably forward POSIX signals
@@ -345,38 +345,81 @@ placeholder template to copy from if you ever need to recreate it by hand;
 
 ## Project layout
 
-The console app lives in its own `AutomowerConsole/` subfolder, with a
-sibling `AutomowerConsole.Tests/` (NUnit) referencing it via
-`InternalsVisibleTo`, and `am.cmd`, `am.sh`, and `automower.slnx` at the
-repo root. Run the tests with `dotnet test`.
+Four projects under `automower.slnx`: a shared library, the CLI, its tests,
+and a web dashboard — the CLI and the web app are two independent
+presentation layers over the same domain/service code, not one depending on
+the other.
 
-- `AutomowerConsole/Program.cs` — CLI entry point, argument parsing, and
-  result printing
-- `AutomowerConsole/MowerService.cs` — mower listing, caching, and
-  name/id/index resolution
-- `AutomowerConsole/MowerDetailService.cs` — fetching a specific mower's live
-  status, messages, and work area detail
-- `AutomowerConsole/ScheduleService.cs` — calendar/schedule calculations and
-  the schedule cache
-- `AutomowerConsole/TrackingService.cs` — the `track` polling loop and
-  `sessions` log summarization
-- `AutomowerConsole/AutomowerConnect.cs` — facade over `HusqvarnaClient` that
-  owns the auth lifecycle (auto-authenticate, retry once on token expiry),
-  reached via a shared `AutomowerConnect.Instance` so the services above
-  never touch auth directly
-- `AutomowerConsole/HusqvarnaClient.cs` — low-level OAuth2 + Automower
-  Connect API HTTP calls
-- `AutomowerConsole/Models.cs` — JSON response models and config/cache
-  record types
-- `AutomowerConsole/Storage.cs` — reads/writes `.config/config.json` and
-  `.data/*.json(l)`, and finds the repo root (nearest `.slnx`, not `.csproj`
-  — there's only ever one, and it stays in the true repo root even as more
-  projects are added) that they're anchored to
-- `AutomowerConsole/ErrorCodes.cs` — full Automower error code → description
-  table
-- `AutomowerConsole.Tests/` — NUnit test project; `AutomowerConsole.csproj`
-  grants it access to internal types via `<InternalsVisibleTo>`
-- `automower.slnx` — solution file referencing both projects
+- **`AutomowerConsole.Core/`** — the shared domain/service layer. Everything
+  in here is what used to live directly in `AutomowerConsole/` before the
+  CLI and `AutomowerWeb` both needed it; `public` is a real API boundary
+  here now, not the `internal` + `InternalsVisibleTo` pattern still used
+  for test-only access:
+  - `MowerService.cs` — mower listing, caching, and name/id/index resolution
+  - `MowerDetailService.cs` — fetching a specific mower's live status,
+    messages, and work area detail
+  - `ScheduleService.cs` — calendar/schedule calculations and the schedule
+    cache
+  - `TrackingService.cs` — the `track` polling loop and `sessions`/`daily`
+    log summarization
+  - `ErrorCodes.cs`, `Extensions.cs` (`FormatDuration`, `IsNighttime`) — small
+    public helpers both consumers use for display
+  - `AutomowerConnect.cs` / `HusqvarnaClient.cs` — auth + raw HTTP calls,
+    deliberately kept `internal` to Core — nothing outside Core, in either
+    the CLI or the web app, should reach the API directly; go through the
+    services above instead
+  - `Storage.cs` — reads/writes `.config/config.json` and `.data/*.json(l)`,
+    and finds the repo root (nearest `.slnx`, not `.csproj` — there's only
+    ever one, and it stays in the true repo root regardless of how many
+    projects sit under it) that they're anchored to. `public`, unlike the
+    other internals above, since the CLI's own config/state commands
+    (`config`, `use`, `current`) call it directly with no service layer of
+    their own
+  - `Models.cs` — JSON response models and config/cache record types (the
+    pure wire-DTOs the API's JSON unwraps into stay `internal`; the actual
+    domain types services return are `public`)
+- **`AutomowerConsole/`** — the CLI. Just `Program.cs` now: argument
+  parsing and result printing on top of `AutomowerConsole.Core`'s services
+- **`AutomowerConsole.Tests/`** — NUnit tests, referencing
+  `AutomowerConsole.Core` directly (it's what they've always actually
+  tested — `TrackingService`, etc.)
+- **`AutomowerWeb/`** — the Blazor web dashboard, see **Web dashboard**
+  below
+- `am.cmd` / `am.sh` / `automower.slnx` at the repo root
+
+Run the tests with `dotnet test`.
+
+## Web dashboard (`AutomowerWeb`)
+
+A read-only Blazor Server app: a `/` dashboard (live status per mower —
+activity, battery, work area, connected, next start — plus that mower's
+sessions from *today only*) and a `/mower/{name}` details page per mower
+(full session history, daily rollup, work areas, stay-out zones, schedule,
+recent messages). No login yet, and deliberately no mower control anywhere
+in it — an unauthenticated public control surface for a physical outdoor
+device is a different risk class than an unauthenticated read-only
+dashboard, and hasn't been asked for.
+
+Run it locally the same way as any ASP.NET project, from the repo root so
+it can see `.config`/`.data`:
+
+```
+dotnet run --project AutomowerWeb
+```
+
+then open the URL it prints (default `http://localhost:5152`).
+
+**No auto-refresh timer on the dashboard, by design.** It's a 4th
+independent process authenticating with the same Husqvarna app key/secret
+as the 3 `track` sessions (see `AutomowerConsole`'s `startall.sh` notes on
+Husqvarna's `simultaneous.logins` rejection) — a background poll loop would
+add another recurring source of auth traffic for a dashboard nobody's
+continuously watching. It loads once per page visit and on an explicit
+"🔄 Refresh" click instead.
+
+**Not yet deployed anywhere** — running it in its own container (separate
+from the one running `track`), exposing it via router port-forwarding, and
+adding auth are all separate, later steps, not part of what's built here.
 - `am.cmd` / `am.sh` — shortcuts that build `AutomowerConsole.csproj` once
   and then run the compiled `.dll` directly (not `dotnet run` — see above)
 - `startall.sh` / `stopall.sh` — start/stop one tmux `track` session per

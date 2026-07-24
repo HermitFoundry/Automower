@@ -1,8 +1,14 @@
 using System.Text.Json;
 
-namespace AutomowerConsole;
+namespace AutomowerConsole.Core;
 
-internal static class Storage
+// Public: unlike AutomowerConnect/HusqvarnaClient (internal - nothing
+// outside Core should make API calls directly), the CLI's config/state
+// commands (CommandConfig, CommandUse, CommandCurrent in Program.cs) read
+// and write config.json/state.json directly, without a service layer of
+// their own - an accepted design decision from the earlier service-layer
+// pass, not something this extraction changes.
+public static class Storage
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 

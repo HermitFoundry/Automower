@@ -1,4 +1,4 @@
-using AutomowerConsole;
+using AutomowerConsole.Core;
 
 namespace AutomowerConsole.Tests;
 

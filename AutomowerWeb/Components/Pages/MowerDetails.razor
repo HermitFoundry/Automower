@@ -1,0 +1,224 @@
+@page "/mower/{Name}"
+@inject MowerService MowerService
+@inject MowerDetailService MowerDetailService
+@inject ScheduleService ScheduleService
+@inject TrackingService TrackingService
+
+<PageTitle>@Name - Automower</PageTitle>
+
+<a class="back-link" href="/">← Dashboard</a>
+
+@if (_loading)
+{
+    <p class="muted">Loading…</p>
+}
+else if (_error is not null)
+{
+    <p class="banner banner-error">⚠️ @_error</p>
+}
+else if (_detail is not null && _stored is not null)
+{
+    var a = _detail.Attributes;
+
+    <div class="details-header">
+        <span class="mower-icon">@MowerDisplay.Icon(a.Mower.Activity, a.Metadata.Connected)</span>
+        <h1>@_stored.Name</h1>
+    </div>
+    <p class="muted">@_stored.Model · serial @_stored.SerialNumber</p>
+
+    @if (a.Mower.ErrorCode != 0)
+    {
+        <p class="banner banner-error">⚠️ Error @a.Mower.ErrorCode: @ErrorCodes.Describe(a.Mower.ErrorCode)</p>
+    }
+
+    <section>
+        <h2>🗺️ Work areas</h2>
+        @if ((a.WorkAreas ?? []).Length == 0)
+        {
+            <p class="muted small">No work areas configured.</p>
+        }
+        else
+        {
+            <table>
+                <thead><tr><th>Name</th><th>Cutting height</th><th>Enabled</th></tr></thead>
+                <tbody>
+                    @foreach (var wa in a.WorkAreas!)
+                    {
+                        <tr>
+                            <td>@wa.Name.Trim()</td>
+                            <td>@wa.CuttingHeight</td>
+                            <td>@(wa.Enabled ? "✅" : "❌")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+
+    <section>
+        <h2>🚫 Stay-out zones</h2>
+        @if (a.StayOutZones is null || a.StayOutZones.Zones.Length == 0)
+        {
+            <p class="muted small">No stay-out zones configured.</p>
+        }
+        else
+        {
+            <ul>
+                @foreach (var z in a.StayOutZones.Zones)
+                {
+                    <li>@z.Name @(z.Enabled ? "" : "(disabled)")</li>
+                }
+            </ul>
+        }
+    </section>
+
+    <section>
+        <h2>📅 Schedule</h2>
+        @{
+            var tasks = a.Calendar?.Tasks ?? [];
+            var workAreaNames = (a.WorkAreas ?? []).ToDictionary(w => w.WorkAreaId, w => w.Name.Trim());
+        }
+        @if (tasks.Length == 0)
+        {
+            <p class="muted small">No calendar tasks configured.</p>
+        }
+        else
+        {
+            <ul>
+                @foreach (var t in tasks)
+                {
+                    <li>@FormatTask(t, workAreaNames)</li>
+                }
+            </ul>
+            var next = ScheduleService.NextCalendarStart(tasks, DateTimeOffset.Now);
+            <p class="muted small">Next calendar start: @(next?.ToString("yyyy-MM-dd HH:mm") ?? "none")</p>
+        }
+    </section>
+
+    <section>
+        <h2>📊 Daily rollup</h2>
+        @if (_days.Count == 0)
+        {
+            <p class="muted small">No track history yet.</p>
+        }
+        else
+        {
+            <table>
+                <thead><tr><th>Date</th><th>Mowing</th><th>Charging</th><th>Full</th></tr></thead>
+                <tbody>
+                    @foreach (var day in _days)
+                    {
+                        <tr>
+                            <td>@day.Date.ToString("yyyy-MM-dd")</td>
+                            <td>@(day.Mowing.Count == 0 ? "—" : string.Join(", ", day.Mowing.Select(m => $"{m.Duration.FormatDuration()}{(m.WorkAreaName is null ? "" : $" [{m.WorkAreaName}]")}")))</td>
+                            <td>@(day.Charging > TimeSpan.Zero ? day.Charging.FormatDuration() : "—")</td>
+                            <td>@(day.Full > TimeSpan.Zero ? day.Full.FormatDuration() : "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+
+    <section>
+        <h2>🕒 Session history</h2>
+        @if (_sessions.Count == 0)
+        {
+            <p class="muted small">No track history yet.</p>
+        }
+        else
+        {
+            <table>
+                <thead><tr><th></th><th>Date</th><th>Activity</th><th>Time</th><th>Duration</th><th>Battery</th><th>Area</th></tr></thead>
+                <tbody>
+                    @foreach (var s in _sessions)
+                    {
+                        <tr>
+                            <td>@MowerDisplay.Icon(s.Activity, true)</td>
+                            <td>@s.Start.ToString("yyyy-MM-dd")</td>
+                            <td>@MowerDisplay.Label(s.Activity)</td>
+                            <td>@s.Start.ToString("HH:mm")–@(s.End?.ToString("HH:mm") ?? "ongoing")</td>
+                            <td>@SessionDuration(s).FormatDuration()</td>
+                            <td>@s.BatteryStart%→@s.BatteryEnd%</td>
+                            <td>@(s.WorkAreaName ?? "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+
+    <section>
+        <h2>✉️ Recent messages</h2>
+        @if (_messages.Count == 0)
+        {
+            <p class="muted small">No messages.</p>
+        }
+        else
+        {
+            <ul>
+                @foreach (var m in _messages)
+                {
+                    <li>@DateTimeOffset.FromUnixTimeSeconds(m.Time).ToLocalTime().ToString("yyyy-MM-dd HH:mm") — @m.Severity: @ErrorCodes.Describe(m.Code)</li>
+                }
+            </ul>
+        }
+    </section>
+}
+
+@code {
+    [Parameter] public string Name { get; set; } = "";
+
+    private bool _loading = true;
+    private string? _error;
+    private StoredMower? _stored;
+    private MowerData? _detail;
+    private List<TrackSession> _sessions = [];
+    private List<DailyActivity> _days = [];
+    private List<MessageItem> _messages = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _stored = await MowerService.ResolveExplicitMowerAsync(Name);
+            if (_stored is null)
+            {
+                _error = $"No mower found matching '{Name}'.";
+                return;
+            }
+
+            _detail = await MowerDetailService.GetMowerDetailAsync(_stored.Id);
+            _sessions = TrackingService.SummarizeSessions(_stored.Name, includeCalendarInfo: false);
+            _days = TrackingService.SummarizeDailyActivity(_stored.Name);
+            _messages = (await MowerDetailService.GetMessagesAsync(_stored.Id))
+                .OrderByDescending(m => m.Time)
+                .Take(20)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Couldn't load {Name}: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static TimeSpan SessionDuration(TrackSession s) => (s.End ?? DateTimeOffset.Now) - s.Start;
+
+    private static string FormatTask(CalendarTask t, Dictionary<long, string> workAreaNames)
+    {
+        var days = new[]
+        {
+            (t.Monday, "Mon"), (t.Tuesday, "Tue"), (t.Wednesday, "Wed"), (t.Thursday, "Thu"),
+            (t.Friday, "Fri"), (t.Saturday, "Sat"), (t.Sunday, "Sun"),
+        };
+        var dayLabel = string.Join(",", days.Where(d => d.Item1).Select(d => d.Item2));
+        var start = TimeSpan.FromMinutes(t.Start);
+        var end = TimeSpan.FromMinutes(t.Start + t.Duration);
+        var area = t.WorkAreaId is { } id && workAreaNames.TryGetValue(id, out var name) ? $" [{name}]" : "";
+        return $"{dayLabel}  {start:hh\\:mm}-{end:hh\\:mm}{area}";
+    }
+}

@@ -1,8 +1,8 @@
 using System.Text.Json.Serialization;
 
-namespace AutomowerConsole;
+namespace AutomowerConsole.Core;
 
-record Config
+public record Config
 {
     public string AppKey { get; init; } = "";
     public string AppSecret { get; init; } = "";
@@ -19,7 +19,11 @@ record Config
     public int NightEndHour { get; init; } = 8;
 }
 
-record TokenResponse
+// Wire DTOs below (TokenResponse through WorkAreaResourceData) stay internal
+// to Core - only HusqvarnaClient/AutomowerConnect ever touch them directly;
+// callers outside Core only ever see the unwrapped domain types further down.
+
+internal record TokenResponse
 {
     [JsonPropertyName("access_token")]
     public string AccessToken { get; init; } = "";
@@ -34,13 +38,13 @@ record TokenResponse
     public string Provider { get; init; } = "";
 }
 
-record MowersResponse
+internal record MowersResponse
 {
     [JsonPropertyName("data")]
     public MowerData[] Data { get; init; } = [];
 }
 
-record MowerData
+public record MowerData
 {
     [JsonPropertyName("id")]
     public string Id { get; init; } = "";
@@ -52,7 +56,7 @@ record MowerData
     public MowerAttributes Attributes { get; init; } = new();
 }
 
-record MowerAttributes
+public record MowerAttributes
 {
     [JsonPropertyName("system")]
     public MowerSystem System { get; init; } = new();
@@ -79,7 +83,7 @@ record MowerAttributes
     public CalendarInfo? Calendar { get; init; }
 }
 
-record WorkArea
+public record WorkArea
 {
     [JsonPropertyName("workAreaId")]
     public long WorkAreaId { get; init; }
@@ -109,13 +113,13 @@ record WorkArea
     public CalendarInfo? Calendar { get; init; }
 }
 
-record CalendarInfo
+public record CalendarInfo
 {
     [JsonPropertyName("tasks")]
     public CalendarTask[] Tasks { get; init; } = [];
 }
 
-record CalendarTask
+public record CalendarTask
 {
     // Minutes from midnight
     [JsonPropertyName("start")]
@@ -150,13 +154,13 @@ record CalendarTask
     public long? WorkAreaId { get; init; }
 }
 
-record WorkAreaResponse
+internal record WorkAreaResponse
 {
     [JsonPropertyName("data")]
     public WorkAreaResourceData Data { get; init; } = new();
 }
 
-record WorkAreaResourceData
+internal record WorkAreaResourceData
 {
     [JsonPropertyName("id")]
     public string Id { get; init; } = "";
@@ -168,7 +172,7 @@ record WorkAreaResourceData
     public WorkArea Attributes { get; init; } = new();
 }
 
-record StayOutZonesInfo
+public record StayOutZonesInfo
 {
     [JsonPropertyName("dirty")]
     public bool Dirty { get; init; }
@@ -177,7 +181,7 @@ record StayOutZonesInfo
     public StayOutZone[] Zones { get; init; } = [];
 }
 
-record StayOutZone
+public record StayOutZone
 {
     [JsonPropertyName("id")]
     public string Id { get; init; } = "";
@@ -189,7 +193,7 @@ record StayOutZone
     public bool Enabled { get; init; }
 }
 
-record MowerSystem
+public record MowerSystem
 {
     [JsonPropertyName("name")]
     public string Name { get; init; } = "";
@@ -201,13 +205,13 @@ record MowerSystem
     public long SerialNumber { get; init; }
 }
 
-record BatteryInfo
+public record BatteryInfo
 {
     [JsonPropertyName("batteryPercent")]
     public int BatteryPercent { get; init; }
 }
 
-record MowerActivityState
+public record MowerActivityState
 {
     [JsonPropertyName("mode")]
     public string Mode { get; init; } = "";
@@ -235,7 +239,7 @@ record MowerActivityState
     public int ErrorCode { get; init; }
 }
 
-record PlannerInfo
+public record PlannerInfo
 {
     // Unix epoch milliseconds; 0 means no scheduled start
     [JsonPropertyName("nextStartTimestamp")]
@@ -245,7 +249,7 @@ record PlannerInfo
     public string RestrictedReason { get; init; } = "";
 }
 
-record MetadataInfo
+public record MetadataInfo
 {
     [JsonPropertyName("connected")]
     public bool Connected { get; init; }
@@ -255,19 +259,19 @@ record MetadataInfo
     public long StatusTimestamp { get; init; }
 }
 
-record MowerResponse
+internal record MowerResponse
 {
     [JsonPropertyName("data")]
     public MowerData Data { get; init; } = new();
 }
 
-record MessagesResponse
+internal record MessagesResponse
 {
     [JsonPropertyName("data")]
     public MessagesData Data { get; init; } = new();
 }
 
-record MessagesData
+internal record MessagesData
 {
     [JsonPropertyName("id")]
     public string Id { get; init; } = "";
@@ -279,13 +283,13 @@ record MessagesData
     public MessagesAttributes Attributes { get; init; } = new();
 }
 
-record MessagesAttributes
+internal record MessagesAttributes
 {
     [JsonPropertyName("messages")]
     public MessageItem[] Messages { get; init; } = [];
 }
 
-record MessageItem
+public record MessageItem
 {
     // Unix epoch seconds
     [JsonPropertyName("time")]
@@ -305,10 +309,10 @@ record MessageItem
 }
 
 // Persisted to mowers.json
-record StoredMower(string Id, string Name, string Model, long SerialNumber);
+public record StoredMower(string Id, string Name, string Model, long SerialNumber);
 
 // Persisted to state.json
-record ActiveState(string ActiveMowerId, string ActiveMowerName);
+public record ActiveState(string ActiveMowerId, string ActiveMowerName);
 
 // Persisted to schedule.json, keyed by mower id
-record MowerSchedule(string MowerName, DateTimeOffset FetchedAt, CalendarTask[] Tasks);
+public record MowerSchedule(string MowerName, DateTimeOffset FetchedAt, CalendarTask[] Tasks);

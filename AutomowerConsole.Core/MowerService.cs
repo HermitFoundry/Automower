@@ -1,4 +1,4 @@
-namespace AutomowerConsole;
+namespace AutomowerConsole.Core;
 
 // Mower listing, caching, and resolution - the "which mower(s) are we
 // talking about" concern. Wraps AutomowerConnect for the live API and
@@ -6,7 +6,7 @@ namespace AutomowerConsole;
 // (ambiguous match, not found, fetching-from-API notices) since those are
 // intrinsic to the resolution process itself, not a separate presentation
 // layer on top of it.
-internal class MowerService
+public class MowerService
 {
     public async Task<List<StoredMower>> RefreshMowersAsync()
     {

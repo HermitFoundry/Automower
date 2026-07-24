@@ -1,4 +1,6 @@
 <Solution>
+  <Project Path="AutomowerConsole.Core/AutomowerConsole.Core.csproj" />
   <Project Path="AutomowerConsole/AutomowerConsole.csproj" />
   <Project Path="AutomowerConsole.Tests/AutomowerConsole.Tests.csproj" />
+  <Project Path="AutomowerWeb/AutomowerWeb.csproj" />
 </Solution>

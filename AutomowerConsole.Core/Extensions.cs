@@ -1,6 +1,6 @@
-﻿namespace AutomowerConsole
+﻿namespace AutomowerConsole.Core
 {
-    internal static class Extensions
+    public static class Extensions
     {
         extension(DateTimeOffset now)
         {
