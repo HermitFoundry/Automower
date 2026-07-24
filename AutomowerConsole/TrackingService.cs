@@ -27,7 +27,7 @@ internal class TrackingService(ScheduleService schedule)
         Console.WriteLine($"Tracking {mowerName}. Logging to {logPath}. Press Ctrl+C to stop.");
         Console.WriteLine($"  Active/scheduled: every {activeIntervalSeconds}s   Idle (daytime): every {config.IdleIntervalSeconds}s   " +
                            $"Night ({config.NightStartHour:00}:00-{config.NightEndHour:00}:00): every {config.NightIntervalSeconds}s");
-        Console.WriteLine("While parked at the charging station and no schedule/mowing is active, only the first poll after arrival is logged.");
+        Console.WriteLine("While parked at the charging station, only the first poll after arrival and the poll where battery reaches 100% are logged.");
         Console.WriteLine("The mower's schedule is refreshed from schedule.json's cache each poll (no extra API cost) - run 'schedule' to force an update.");
 
         // Seed with whatever's cached so the very first wait (before any poll)
@@ -37,6 +37,10 @@ internal class TrackingService(ScheduleService schedule)
         string? lastActivity = null;
         var recordCount = 0;
         long totalBytes = 0;
+        // Reset whenever a new charger stay begins; tracks whether this stay's
+        // "reached 100%" record has already been written, so a stay that sits
+        // at 100% for hours doesn't re-log every single poll.
+        var loggedFullChargeThisStay = false;
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -50,6 +54,7 @@ internal class TrackingService(ScheduleService schedule)
                 using var doc = JsonDocument.Parse(raw);
                 var attributes = doc.RootElement.GetProperty("data").GetProperty("attributes");
                 var activity = attributes.GetProperty("mower").GetProperty("activity").GetString() ?? "";
+                var battery = attributes.GetProperty("battery").GetProperty("batteryPercent").GetInt32();
 
                 // The mower payload already carries the schedule - update the
                 // cache from it for free instead of a separate daily fetch.
@@ -62,7 +67,19 @@ internal class TrackingService(ScheduleService schedule)
                 var wasAtCharger = lastActivity is not null && IsAtCharger(lastActivity);
                 (nextIntervalSeconds, var reason) = schedule.DetermineTrackingInterval(tasks, activity, activeIntervalSeconds, timestamp, config);
 
-                if (!(atCharger && wasAtCharger))
+                if (atCharger && !wasAtCharger)
+                {
+                    // Just arrived - this stay's "reached 100%" record hasn't
+                    // happened yet, unless it rolled in already full.
+                    loggedFullChargeThisStay = battery == 100;
+                }
+                var reachedFullCharge = atCharger && wasAtCharger && battery == 100 && !loggedFullChargeThisStay;
+                if (reachedFullCharge)
+                {
+                    loggedFullChargeThisStay = true;
+                }
+
+                if (!(atCharger && wasAtCharger) || reachedFullCharge)
                 {
                     var byteCount = Encoding.UTF8.GetByteCount(raw);
                     var record = new
@@ -77,7 +94,8 @@ internal class TrackingService(ScheduleService schedule)
 
                     recordCount++;
                     totalBytes += byteCount;
-                    Console.WriteLine($"[{timestamp:yyyy-MM-dd HH:mm:ss}] logged (activity: {activity}, {byteCount} bytes, next check in {nextIntervalSeconds}s - {reason}) - " +
+                    var note = reachedFullCharge ? ", reached 100%" : "";
+                    Console.WriteLine($"[{timestamp:yyyy-MM-dd HH:mm:ss}] logged (activity: {activity}{note}, {byteCount} bytes, next check in {nextIntervalSeconds}s - {reason}) - " +
                                        $"{recordCount} records, {totalBytes / 1024.0:F1} KB this session");
                 }
                 else
@@ -115,9 +133,13 @@ internal class TrackingService(ScheduleService schedule)
     // from one work area straight into the next. A session's end is the
     // timestamp of the *next* differing poll (not its own last poll), since
     // that's the earliest point we can confirm the state changed - this matters
-    // most for charger stays, where 'track' only logs one poll on arrival and
-    // then skips repeats, so a session can be a single log line whose real end
-    // is only knowable from what comes after it. Returned newest first.
+    // most for charger stays, where 'track' only logs the arrival poll and the
+    // poll where battery reaches 100% (see RunAsync), skipping everything in
+    // between - a session can be just those two log lines (or one, if it
+    // never reaches 100% before leaving), with its real end only knowable
+    // from what comes after it. The 100%-arrival second point is what gives
+    // BatteryEnd a real charged-to value instead of just repeating
+    // BatteryStart. Returned newest first.
     public List<TrackSession> SummarizeSessions(string mowerName, bool includeCalendarInfo)
     {
         var logPath = Storage.GetTrackLogPath(mowerName);
@@ -204,19 +226,32 @@ internal class TrackingService(ScheduleService schedule)
 
             DateTimeOffset? nextCalendarStart = null;
             DateTimeOffset? nextPlannedStart = null;
-            if (includeCalendarInfo && IsAtCharger(activity))
+            DateTimeOffset? chargeCompleteAt = null;
+            if (IsAtCharger(activity))
             {
-                nextCalendarStart = schedule.NextCalendarStart(latestCalendarTasks, start);
-                var plannerNextStart = points[i].PlannerNextStart;
-                nextPlannedStart = plannerNextStart > 0
-                    ? DateTimeOffset.FromUnixTimeMilliseconds(plannerNextStart).ToLocalTime()
-                    : null;
+                for (var k = i; k <= j; k++)
+                {
+                    if (points[k].Battery >= 100)
+                    {
+                        chargeCompleteAt = points[k].Time;
+                        break;
+                    }
+                }
+
+                if (includeCalendarInfo)
+                {
+                    nextCalendarStart = schedule.NextCalendarStart(latestCalendarTasks, start);
+                    var plannerNextStart = points[i].PlannerNextStart;
+                    nextPlannedStart = plannerNextStart > 0
+                        ? DateTimeOffset.FromUnixTimeMilliseconds(plannerNextStart).ToLocalTime()
+                        : null;
+                }
             }
 
             sessions.Add(new TrackSession(
                 start, end, activity, batteryStart, batteryEnd,
                 workAreaNames.TryGetValue(workAreaId, out var waName) ? waName : null,
-                nextCalendarStart, nextPlannedStart));
+                nextCalendarStart, nextPlannedStart, chargeCompleteAt));
 
             i = j + 1;
         }
@@ -240,20 +275,22 @@ internal class TrackingService(ScheduleService schedule)
         => AggregateDailyActivity(SummarizeSessions(mowerName, includeCalendarInfo: false));
 
     // Pure: total mowing time per work area per day (summed if the same area
-    // was mowed more than once that day), plus one combined charging total
-    // per day (CHARGING and PARKED_IN_CS together - "time spent at the
-    // charger", not the finer distinction between actively charging and
-    // sitting there already full; a real mower's own activity label for
-    // this is inconsistent - sometimes it's plainly "Charging", sometimes a
-    // "Parked" session with flat reported battery turns out to have charged
-    // anyway, only visible via a much-higher battery% on the *next* session -
-    // not attempted here, kept as the simple combined sum by design).
-    // Sessions that don't fit either bucket (Going home, Leaving, Stopped,
-    // ...) are not represented - only Mowing and Charging were asked for. A
-    // session is attributed entirely to its *start* day, same simplification
-    // 'sessions' itself makes for its single date column - an overnight
-    // charge isn't split across the two days it actually spans. Returned
-    // newest day first, matching 'sessions'.
+    // was mowed more than once that day), plus a charger-time split per day -
+    // CHARGING and PARKED_IN_CS are still combined into one "time spent at
+    // the charger" total (the activity label itself is an unreliable signal
+    // for whether real charging is happening - not attempted here), but that
+    // total is now divided into Charging (session start -> the point battery
+    // first hit 100%, per TrackSession.ChargeCompleteAt) and Full (that point
+    // -> session end, i.e. sitting there already charged). A session with no
+    // ChargeCompleteAt (never reached 100% before it ended, or ended still
+    // ongoing, or predates the field existing) counts entirely as Charging,
+    // none as Full - "still charging" as far as this data can tell. Sessions
+    // that don't fit either bucket (Going home, Leaving, Stopped, ...) are
+    // not represented - only Mowing and Charging/Full were asked for. A
+    // session (and its Charging/Full split) is attributed entirely to its
+    // *start* day, same simplification 'sessions' itself makes for its
+    // single date column - an overnight charge isn't split across the two
+    // days it actually spans. Returned newest day first, matching 'sessions'.
     public static List<DailyActivity> AggregateDailyActivity(IEnumerable<TrackSession> sessions)
     {
         var byDay = new SortedDictionary<DateOnly, DailyAccumulator>();
@@ -261,7 +298,7 @@ internal class TrackingService(ScheduleService schedule)
         foreach (var s in sessions.OrderBy(s => s.Start))
         {
             var day = DateOnly.FromDateTime(s.Start.Date);
-            var duration = (s.End ?? DateTimeOffset.Now) - s.Start;
+            var end = s.End ?? DateTimeOffset.Now;
 
             if (!byDay.TryGetValue(day, out var acc))
             {
@@ -271,17 +308,25 @@ internal class TrackingService(ScheduleService schedule)
 
             if (IsAtCharger(s.Activity))
             {
-                acc.Charging += duration;
+                if (s.ChargeCompleteAt is { } completeAt)
+                {
+                    acc.Charging += completeAt - s.Start;
+                    acc.Full += end - completeAt;
+                }
+                else
+                {
+                    acc.Charging += end - s.Start;
+                }
             }
             else if (s.Activity == "MOWING")
             {
-                acc.AddMowing(s.WorkAreaName, duration);
+                acc.AddMowing(s.WorkAreaName, end - s.Start);
             }
         }
 
         var result = byDay
-            .Where(kv => kv.Value.Mowing.Count > 0 || kv.Value.Charging > TimeSpan.Zero)
-            .Select(kv => new DailyActivity(kv.Key, kv.Value.Mowing, kv.Value.Charging))
+            .Where(kv => kv.Value.Mowing.Count > 0 || kv.Value.Charging > TimeSpan.Zero || kv.Value.Full > TimeSpan.Zero)
+            .Select(kv => new DailyActivity(kv.Key, kv.Value.Mowing, kv.Value.Charging, kv.Value.Full))
             .ToList();
         result.Reverse();
         return result;
@@ -291,6 +336,7 @@ internal class TrackingService(ScheduleService schedule)
     {
         public List<WorkAreaTime> Mowing { get; } = [];
         public TimeSpan Charging;
+        public TimeSpan Full;
 
         public void AddMowing(string? workAreaName, TimeSpan duration)
         {
@@ -315,8 +361,17 @@ internal record TrackSession(
     int BatteryEnd,
     string? WorkAreaName,
     DateTimeOffset? NextCalendarStart,
-    DateTimeOffset? NextPlannedStart);
+    DateTimeOffset? NextPlannedStart,
+    // First point within this charger session where battery reached 100%
+    // (see RunAsync's second per-stay log point) - null means either not a
+    // charger session, or one that never reached 100% before it ended
+    // ("still charging" the whole time, incl. currently-ongoing ones).
+    // Forward-looking only: track logs written before this field existed
+    // only ever have the one arrival point, so historical sessions always
+    // report null here, not a real "arrived already full" or "never
+    // finished" fact.
+    DateTimeOffset? ChargeCompleteAt = null);
 
-internal record DailyActivity(DateOnly Date, List<WorkAreaTime> Mowing, TimeSpan Charging);
+internal record DailyActivity(DateOnly Date, List<WorkAreaTime> Mowing, TimeSpan Charging, TimeSpan Full);
 
 internal record WorkAreaTime(string? WorkAreaName, TimeSpan Duration);

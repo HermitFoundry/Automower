@@ -536,6 +536,23 @@ async Task CommandSessions(string[] sessionArgs)
             $"  {s.Start:yyyy-MM-dd}  {DescribeActivity(s.Activity),-11} {s.Start:HH:mm}-{endLabel,-7} " +
             $"{durationLabel,-9}  battery {s.BatteryStart,3}% -> {s.BatteryEnd,3}%{workAreaLabel}";
 
+        // No marker at all when ChargeCompleteAt is null and the session has
+        // already ended - could mean it left before reaching 100%, or could
+        // just be an old log line from before this was tracked (see
+        // TrackSession.ChargeCompleteAt) - not distinguishable, so don't
+        // assert either.
+        if (TrackingService.IsAtCharger(s.Activity))
+        {
+            if (s.ChargeCompleteAt is { } completeAt)
+            {
+                sessionLine += $"  full at {completeAt:HH:mm}";
+            }
+            else if (s.End is null)
+            {
+                sessionLine += "  still charging";
+            }
+        }
+
         if (showCalendar && TrackingService.IsAtCharger(s.Activity))
         {
             var nextCalendarLabel = s.NextCalendarStart is null ? "none" : s.NextCalendarStart.Value.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
@@ -549,10 +566,10 @@ async Task CommandSessions(string[] sessionArgs)
 
 // One line per calendar day: total Mowing time per work area that day
 // (repeated on the line for each additional area, summed if the same area
-// was mowed more than once), then a single combined Charging total last -
-// charging isn't tied to a work area, so it's outside that list, not part
-// of it. See TrackingService.SummarizeDailyActivity for the day-attribution
-// and CHARGING/PARKED_IN_CS-combining rules.
+// was mowed more than once), then Charging and (if any) Full last - neither
+// is tied to a work area, so both are outside that list, not part of it.
+// See TrackingService.AggregateDailyActivity for the day-attribution,
+// CHARGING/PARKED_IN_CS-combining, and Charging-vs-Full split rules.
 async Task CommandDaily(string[] dailyArgs)
 {
     var resolved = await mowerService.ResolveMowerAsync(dailyArgs.FirstOrDefault());
@@ -572,6 +589,10 @@ async Task CommandDaily(string[] dailyArgs)
         if (day.Charging > TimeSpan.Zero)
         {
             parts.Add($"Charging {day.Charging.FormatDuration()}");
+        }
+        if (day.Full > TimeSpan.Zero)
+        {
+            parts.Add($"Full {day.Full.FormatDuration()}");
         }
 
         var date = day.Date.ToDateTime(TimeOnly.MinValue).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -620,18 +641,20 @@ void PrintUsage()
                                                  track-<mower>.jsonl: fast (default 60s, [seconds]
                                                  overrides) while active or in a scheduled window, else
                                                  every 5 min in daytime, else every 30 min at night
-                                                 (22:00-08:00) - all configurable via 'config'. Skips
-                                                 repeat polls while parked at the charger.
+                                                 (22:00-08:00) - all configurable via 'config'. While
+                                                 parked at the charger, only logs the arrival poll and
+                                                 the poll where battery reaches 100%, skipping the rest.
           automower sessions [--calendar] [mower]
                                                  Summarize track-<mower>.jsonl into one line per
                                                  mowing/charging/etc. session (split on activity or
                                                  work area changing): date, start-end time, duration,
-                                                 battery start% -> end%, and work area name. --calendar
-                                                 adds the next calendar/planned start (as of that poll)
-                                                 under each Charging/Parked session
+                                                 battery start% -> end%, and work area name. Charger
+                                                 sessions also show "full at HH:mm" (or "still charging").
+                                                 --calendar adds the next calendar/planned start (as of
+                                                 that poll) under each Charging/Parked session
           automower daily [mower]                One line per calendar day: total Mowing time per work
-                                                 area that day (repeated per area), then total Charging
-                                                 time for the day
+                                                 area that day (repeated per area), then Charging time
+                                                 and, if any, Full (charged but still parked) time
           automower help                        Show this help
         """);
 }

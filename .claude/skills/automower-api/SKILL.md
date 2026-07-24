@@ -297,10 +297,15 @@ response}` where `response` is the full raw mower payload. Built to answer
 estimating — a log file's size on disk *is* the answer, per mower.
 
 While the mower's `activity` is `CHARGING` or `PARKED_IN_CS` (see
-`IsAtCharger`) **and** it's not inside a scheduled window, only the first
-poll after arrival at the charger is logged — repeat polls while still
-parked are skipped (console-only line), to avoid wasting log volume on an
-unchanging state.
+`IsAtCharger`), only two polls per charger stay are logged: the first poll
+after arrival, and (if it happens before the mower leaves again) the first
+poll where `batteryPercent` reaches 100 — everything else while still
+parked is skipped (console-only line), to avoid wasting log volume on an
+otherwise-unchanging state. The second point exists specifically so
+`sessions`'s grouping (same run of `activity`+`workAreaId`) gets a real
+`BatteryEnd` for a charger session instead of it just repeating
+`BatteryStart` — a stay that arrives already full only logs the one
+arrival poll (nothing left to detect).
 
 Interval is chosen fresh every poll, in this priority order (see
 `CommandTrack`, `IsWithinSchedule`, `IsNighttime`):
@@ -380,6 +385,16 @@ printed by iterating `lines` backwards. Don't be tempted to reverse `points`
 itself before grouping; that would break the "next differing poll" lookahead
 the whole end-time calculation depends on.
 
+**Charger sessions also get a charge-complete marker**, independent of
+`--calendar`: `full at HH:mm` if `TrackSession.ChargeCompleteAt` is set (the
+first poll within that session where `batteryPercent` hit 100 - see
+`track`'s two-points-per-stay logging above), `still charging` if the
+session is still ongoing (`End is null`) and hasn't reached 100% yet, or no
+marker at all if the session already ended with no `ChargeCompleteAt` -
+deliberately not labeled "never reached 100%", since that's indistinguishable
+from an old log line predating this field (single-point charger sessions
+from before this existed also report `ChargeCompleteAt: null`).
+
 **`--calendar`** appends two values to the end of `Charging`/`Parked` session
 lines only (`IsAtCharger(activity)`) - same line, not a second line (kept
 single-line deliberately for wide-terminal use), both sourced from data
@@ -408,16 +423,23 @@ extra API calls:
 `SummarizeSessions(mowerName, includeCalendarInfo: false)` and re-aggregates
 the returned `List<TrackSession>` by `DateOnly.FromDateTime(s.Start.Date)` -
 no separate log-parsing pass, fully reuses the existing session boundaries.
-Two buckets per day, matching exactly what was asked (not a general
-"activity type" system): Mowing, summed per work area
+Three buckets per day: Mowing, summed per work area
 (`DailyAccumulator.AddMowing` finds-or-creates by `WorkAreaName` including
 `null`, so an unresolved-name area still gets its own bucket rather than
 merging into whichever other unnamed area happened first) via a private
-nested `DailyAccumulator` class; and Charging, one combined total via
-`TrackingService.IsAtCharger` (`CHARGING` + `PARKED_IN_CS` together - no
-finer split). Sessions in neither bucket (`GOING_HOME`, `LEAVING`,
-`STOPPED_IN_GARDEN`, ...) are silently dropped from the rollup - not an
-oversight, just outside what was requested. Days that end up with neither
+nested `DailyAccumulator` class; and Charging/Full, split from what used to
+be one combined `TrackingService.IsAtCharger` total (`CHARGING` +
+`PARKED_IN_CS` together - still no finer split on *that* axis, the
+activity label itself remains an unreliable signal). The split instead uses
+`TrackSession.ChargeCompleteAt`: Charging is session-start → that point (or
+the whole session if `ChargeCompleteAt` is null - "still charging" as far
+as the data shows, same treatment for a genuinely-ongoing session and for
+an old log line that predates this field), Full is that point → session
+end. `Full` is omitted from a day's `daily` line entirely when zero (e.g.
+every charger session that day is still `Charging`-only), same convention
+already used for Charging. Sessions in neither bucket (`GOING_HOME`,
+`LEAVING`, `STOPPED_IN_GARDEN`, ...) are silently dropped from the rollup -
+not an oversight, just outside what was requested. Days that end up with no
 bucket populated (e.g. the only session that day was a 5-minute `Leaving`)
 are filtered out of the result rather than printed as a blank line.
 
@@ -502,6 +524,23 @@ Base URL: `https://api.amc.husqvarna.dev/v1`
 
 ## Gotchas / non-obvious facts
 
+- **The app trusts the host's system-local clock everywhere, uniformly** —
+  `DateTimeOffset.Now` (`TrackingService.cs`'s poll timestamps,
+  `ScheduleService.NextCalendarStart`'s day-boundary math) and
+  `.ToLocalTime()` (every displayed timestamp in `Program.cs`: messages,
+  status, workarea `lastTimeAbandoned`, planner `nextStartTimestamp`) — there
+  is no explicit timezone handling anywhere in the codebase, not a
+  mix of compensated/uncompensated spots. This works correctly only because
+  the host's OS timezone is assumed to equal the mowers' own configured
+  local timezone (Europe/Oslo) — which the calendar's `start`/`duration`
+  minutes-from-midnight are implicitly defined in, regardless of what
+  timezone the polling host happens to run. Confirmed as the root cause of a
+  real ~2h discrepancy between `sessions`/`schedule` output and actual mower
+  behavior on the QNAP container, whose OS clock defaulted to UTC (`date`
+  showed `UTC`, no `/etc/timezone` file) — fixed by setting the container's
+  timezone to Europe/Oslo (now part of `bootstrap.sh`), not by touching the
+  code. Don't "fix" an apparent timestamp bug here without first checking
+  `date` on whatever host is running it.
 - **Inconsistent timestamp units in the same payload**: `messages[].time` is
   Unix epoch **seconds**. But `metadata.statusTimestamp`,
   `planner.nextStartTimestamp`, and `workAreas[].lastTimeAbandoned` are epoch

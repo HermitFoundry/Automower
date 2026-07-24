@@ -164,4 +164,30 @@ public class TrackingServiceAggregateDailyActivityTests
         Assert.That(july23.Charging, Is.EqualTo(july23OwnCharging),
             "2026-07-23 should only include its own two Charging sessions, not any part of the overnight stay that started the day before");
     }
+
+    [Test]
+    public void ChargingSplitsIntoChargingAndFullWhenChargeCompleteAtIsKnown()
+    {
+        DateTimeOffset T(int hour, int minute) => new(2026, 7, 24, hour, minute, 0, TimeSpan.FromHours(2));
+
+        // Reached 100% partway through - Charging should cover only up to
+        // that point, Full the remainder until it left.
+        var midSession = new TrackSession(T(7, 0), T(9, 0), "CHARGING", 40, 100, null, null, null, T(8, 0));
+
+        // Arrived already at 100% - the whole stay is Full, none of it
+        // Charging (nothing left to charge).
+        var arrivedFullSession = new TrackSession(T(10, 0), T(10, 30), "PARKED_IN_CS", 100, 100, null, null, null, T(10, 0));
+
+        // Left before ever reaching 100% - no ChargeCompleteAt, so the whole
+        // stay counts as Charging, same as before this feature existed.
+        var neverFullSession = new TrackSession(T(11, 0), T(11, 20), "CHARGING", 60, 90, null, null, null, null);
+
+        var days = TrackingService.AggregateDailyActivity([midSession, arrivedFullSession, neverFullSession]);
+        var day = days.Single();
+
+        Assert.That(day.Charging, Is.EqualTo(TimeSpan.FromHours(1) + TimeSpan.FromMinutes(20)),
+            "expected 1h (mid-session, 07:00-08:00) + 20m (never-full session) of real Charging time");
+        Assert.That(day.Full, Is.EqualTo(TimeSpan.FromHours(1) + TimeSpan.FromMinutes(30)),
+            "expected 1h (mid-session, 08:00-09:00) + 30m (arrived-full session) of Full time");
+    }
 }

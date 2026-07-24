@@ -11,6 +11,12 @@ adaptive polling/logging mode (`track`).
 - A Husqvarna Developer Portal application (https://developer.husqvarnagroup.cloud/)
   subscribed to both the **Authentication API** and the **Automower Connect API**,
   giving you an application (app) key and secret
+- On a fresh Linux container/host (e.g. a new QNAP Container Station
+  container): `git`, `curl`, `tmux` (for `startall.sh`/`stopall.sh`), and the
+  system timezone set to match the mowers' own configured local time (not
+  the container default, often UTC — see **`track`: adaptive polling and
+  logging** for why this matters). Run `./bootstrap.sh` as root to install
+  all of the above plus the .NET SDK in one idempotent pass.
 
 ## Setup
 
