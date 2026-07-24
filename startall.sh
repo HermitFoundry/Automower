@@ -15,6 +15,15 @@
 # itself almost immediately after being created - looks like "only one
 # mower started" even though the loop reported starting all of them.
 #
+# Sessions are started with a short delay between each (see the 'sleep'
+# below), not all at once: Husqvarna's Authentication API rejects
+# near-simultaneous token requests from the same app key/secret with a 400
+# "simultaneous.logins" error - confirmed via a real run's per-mower log
+# (see below), where 2 of 3 mowers' 'track' processes crashed on startup
+# with exactly that error because 'tmux new-session -d' returns immediately,
+# so a tight loop with no delay fired all 3 AuthenticateAsync() calls within
+# milliseconds of each other.
+#
 # Uses just the model prefix of each mower's name (the part before the first
 # space, e.g. "AM430X" out of "AM430X NERA") as both the tmux session suffix
 # and the mower query passed to 'track' - shorter, and relies on the CLI's
@@ -53,6 +62,7 @@ fi
 
 mkdir -p "$dir/.data"
 
+first=true
 for name in "${names[@]}"; do
     short="${name%% *}"
     session="automower-$short"
@@ -60,6 +70,17 @@ for name in "${names[@]}"; do
     if tmux has-session -t "$session" 2>/dev/null; then
         echo "  $session already running, skipping"
         continue
+    fi
+
+    # Stagger starts - see the top-of-file comment on Husqvarna's
+    # "simultaneous.logins" auth rejection. Only delays before a session
+    # that's actually about to start (not after an already-running one gets
+    # skipped above), so re-running against a partially-up set doesn't wait
+    # needlessly.
+    if [ "$first" = true ]; then
+        first=false
+    else
+        sleep 5
     fi
 
     # stdout+stderr redirected to a per-mower log - if 'track' crashes fast

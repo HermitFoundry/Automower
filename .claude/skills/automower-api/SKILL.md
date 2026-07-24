@@ -78,17 +78,35 @@ either way: `tmux new-session -d ... dotnet "$dll" track "$short"` runs the
 fast crash closes the pane before there's any chance to attach and see why
 - "only one started" with no error message to explain the other two.
 
-**Mitigation (not yet a root-cause fix)**: each session's stdout+stderr is
-now redirected to `.data/startall-<short>.log` (`bash -c "dotnet '$dll'
-track '$short' > '$log' 2>&1"` in place of the bare `dotnet ... track`
-command), so a fast crash is diagnosable after the fact via `cat
-.data/startall-AM430X.log` instead of needing to reproduce it by running
-the same command in the foreground by hand. Deliberately not also `tee`ing
-to the pane / keeping the pane open after exit - that would change what a
-*clean* stop looks like too, breaking `stopall.sh`'s "closes itself within
-3s" detection for a graceful Ctrl+C stop. **Next real diagnostic step**:
-re-run `startall`, then read whichever of `.data/startall-AM430X.log` /
-`.data/startall-AM308V.log` exist, to find the actual exception.
+**Diagnostic infrastructure**: each session's stdout+stderr is redirected to
+`.data/startall-<short>.log` (`bash -c "dotnet '$dll' track '$short' >
+'$log' 2>&1"` in place of the bare `dotnet ... track` command), so a fast
+crash is diagnosable after the fact via `cat .data/startall-AM430X.log`
+instead of needing to reproduce it by running the same command in the
+foreground by hand. Deliberately not also `tee`ing to the pane / keeping the
+pane open after exit - that would change what a *clean* stop looks like too,
+breaking `stopall.sh`'s "closes itself within 3s" detection for a graceful
+Ctrl+C stop.
+
+**Actual root cause, confirmed via that log**: Husqvarna's Authentication
+API, not the app - `HttpRequestException: Token request failed (400
+BadRequest): {"error":"invalid_request","error_description":"Simultaneous
+logins detected for client[id=...], user[id=..., email=...]",
+"error_code":"simultaneous.logins"}`. `tmux new-session -d` returns
+immediately without waiting for the launched command, so the original
+no-delay loop fired all 3 mowers' `AuthenticateAsync()` calls (each its own
+OS process, same app key/secret) within milliseconds of each other -
+Husqvarna's auth service treats that as suspicious concurrent logins for one
+client id and rejects all but one. Same "only 1 of 3 survives" symptom as
+the build race, completely different cause - the earlier build-once fix was
+real and necessary, just not sufficient on its own.
+
+**Fix**: `startall.sh` now staggers session starts with a 5s `sleep` between
+each one actually launched (skipped for a mower whose session already
+exists, so re-running against a partially-up set doesn't wait needlessly) -
+comfortably longer than a single OAuth2 token round-trip, so each
+`AuthenticateAsync()` call completes before the next one fires. Not yet
+re-verified against a real container run.
 
 **Repo layout**: the console app lives in `AutomowerConsole/` (its own
 subfolder), with `automower.slnx` (solution file) plus `am.cmd`/`am.sh` at
