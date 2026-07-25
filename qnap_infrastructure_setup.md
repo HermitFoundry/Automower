@@ -202,6 +202,181 @@ $DOCKER run -d --name automower-caddy \
     caddy:latest
 ```
 
-Both commands are starting points, not yet run/verified against the real
-NAS - update this note once they've actually been executed, same as every
-other infra fact in this file.
+**Update, 2026-07-25: `AutomowerWeb` container created and verified working.**
+Actual commands used and everything hit along the way, below. `Caddy` is
+still not created yet.
+
+### Actual `AutomowerWeb` container creation
+
+```bash
+DOCKER=/share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker
+$DOCKER run -d --name AutomowerWeb \
+    -p 5152:5152 \
+    -v /share/Repos:/repos \
+    debian:13 \
+    sleep infinity
+```
+
+Note the bind mount: `/share/Repos` (the *parent* of the repo, matching
+`debian-dev1`'s own mount exactly - confirmed via `docker inspect
+<name> --format='{{range .Mounts}}{{.Source}} -> {{.Destination}}{{end}}'`
+on both), not the repo directory itself. This means **`debian-dev1` and
+`AutomowerWeb` share one single git working tree** - not two independent
+clones, whatever "two containers" suggested. Checking out a different
+branch inside one container immediately changes what the other sees on
+disk. This is fine for source files (a `git checkout` doesn't touch
+already-running processes - `debian-dev1`'s 3 live `track` tmux sessions
+kept running unaffected when `AutomowerWeb` switched the shared tree from
+`feature/blazor-dashboard` to `feature/public-deployment`), but worth
+knowing before assuming the two containers are isolated from each other at
+the filesystem level - they aren't. They *are* isolated at the process/
+port/crash-blast-radius level, which was the actual goal.
+
+Also worth knowing: `.config/config.json`, `.data/*.json`, and the
+`track-*.jsonl` logs are all on that same shared tree (gitignored, not
+committed) - so `AutomowerWeb` automatically sees the same Husqvarna API
+credentials and mower cache `debian-dev1` already has, no separate setup
+needed.
+
+### Provisioning: the tar/ICU/apt-signing saga
+
+First attempt reused `bootstrap.sh` as it existed before this date, which
+installed the .NET SDK via Microsoft's `dotnet-install.sh` tarball script.
+That failed hard on this specific QNAP Container Station setup:
+
+```
+tar: ...: Cannot change mode to rwxr-xr-x: Bad address
+...
+dotnet_install: Error: Extraction failed
+```
+
+en masse, for most files in the tarball. Compared `debian-dev1` vs the
+freshly-created `AutomowerWeb` container's full `HostConfig` JSON
+(`docker inspect <name> --format='{{json .HostConfig}}'`) to rule out a
+container-config difference - they were effectively identical, so this
+wasn't a container-creation mistake. A `TAR_OPTIONS="--no-same-permissions
+--no-same-owner"` workaround got the script to stop erroring, but left a
+**broken** install behind (no `/usr/local/bin/dotnet` symlink at all).
+
+The actual clue: `debian-dev1` already had a working `dotnet`, despite
+being set up the same way, months earlier - meaning it was never actually
+provisioned via this tarball codepath at all, so the bug had simply never
+been exercised there. This pointed at apt instead, which sidesteps the
+tarball's own `tar` extraction entirely.
+
+Even once reachable, a bare `dotnet --version` on a pure tarball SDK drop
+crashed with:
+
+```
+Couldn't find a valid ICU package installed on the system
+```
+
+- the tarball never installs any system package dependencies, and `libicu`
+isn't present on a bare `debian:13` image. An apt-based install pulls
+`libicu76` in automatically as a real package dependency, avoiding this
+too (a parallel fix also went into `AutomowerWeb.csproj`:
+`<InvariantGlobalization>true</InvariantGlobalization>`, safe there
+specifically because the app already formats everything via
+`CultureInfo.InvariantCulture` explicitly - but that only helps the
+*published app*, not the SDK/CLI tooling itself, which is what actually
+needed apt).
+
+First apt attempt used the generic/older `packages-microsoft-prod.deb`
+config (`.../config/debian/12/...`, a stale copy-paste), which failed
+differently:
+
+```
+Sub-process /usr/bin/sqv returned an error code (1)
+... SHA1 is not considered secure since 2026-02-01
+```
+
+Debian 13 "trixie"'s `apt` uses `sqv` (sequoia) for signature verification,
+which rejects that key certification's SHA-1 signature under trixie's
+stricter default crypto policy. Fixed by using the **Debian-13-specific**
+config URL instead - same Microsoft package, a different (non-SHA1-flagged)
+signing key certification:
+
+```bash
+debian_version="$(. /etc/os-release && echo "$VERSION_ID")"   # "13" on this image
+curl -sSL -o /tmp/packages-microsoft-prod.deb "https://packages.microsoft.com/config/debian/${debian_version}/packages-microsoft-prod.deb"
+dpkg -i /tmp/packages-microsoft-prod.deb
+rm /tmp/packages-microsoft-prod.deb
+apt-get update
+apt-get install -y dotnet-sdk-10.0
+```
+
+This is now what `bootstrap.sh` does (replacing the old tarball section
+entirely) - confirmed working end-to-end on `AutomowerWeb`:
+`dotnet --version` → `10.0.302`, `libicu76` pulled in automatically, no
+errors.
+
+### Passwordless SSH (Windows dev machine → QNAP host)
+
+Set up so commands here can run directly on the NAS instead of relaying
+through copy-paste:
+
+```
+ssh-keygen -t ed25519 -f ~/.ssh/automower_nas -C "windows-dev-machine"
+# public key appended to the QNAP's ~terje/.ssh/authorized_keys
+```
+
+`~/.ssh/config` on the Windows machine (two aliases - one that drops
+straight into `debian-dev1`'s shell, one that stays at the host level for
+`docker` commands):
+
+```
+Host automower
+    HostName 192.168.10.142
+    User terje
+    IdentityFile ~/.ssh/automower_nas
+    RemoteCommand /share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker exec -it -w /repos/Automower debian-dev1 bash
+    RequestTTY yes
+
+Host automower-host
+    HostName 192.168.10.142
+    User terje
+    IdentityFile ~/.ssh/automower_nas
+```
+
+Test with `ssh -o BatchMode=yes automower-host true` - `BatchMode=yes`
+fails fast (no password prompt hang) if the key isn't accepted yet, instead
+of silently blocking on an interactive password prompt that will never be
+answered.
+
+### Provisioning + first run, once `bootstrap.sh` was fixed
+
+```bash
+DOCKER=/share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker
+ssh automower-host "$DOCKER exec -w /repos/Automower AutomowerWeb bash -c 'git config --global --add safe.directory /repos/Automower'"
+# git refuses to operate in a directory it doesn't own by default - the
+# bind-mounted repo is owned by the host's uid, not the container's root.
+ssh automower-host "$DOCKER exec -w /repos/Automower AutomowerWeb bash -c 'git fetch origin && git checkout feature/public-deployment && git pull'"
+ssh automower-host "$DOCKER exec -w /repos/Automower AutomowerWeb bash -c './bootstrap.sh'"   # must run as root - it is, by default, inside this container
+ssh automower-host "$DOCKER exec -w /repos/Automower AutomowerWeb bash -c './startweb.sh'"
+```
+
+Verified both from inside the container and from the QNAP host itself
+(the latter is the one that actually matters - it's what proves the Docker
+port publish is real, not Container Station's broken "Default web URL
+port" toggle from earlier in this file):
+
+```
+$ curl -sI http://localhost:5152/app.css      # from the QNAP host shell
+HTTP/1.1 200 OK
+Content-Length: 7410
+...
+$ docker port AutomowerWeb
+5152/tcp -> 0.0.0.0:5152
+```
+
+`Content-Length: 7410` (not `0`) on `app.css` confirms the `dotnet publish`
+static-asset fix (see `startweb.sh`'s own comments) is working correctly in
+Production mode on the real deployment target, not just locally.
+
+### Still not done
+
+- `Caddy` container - not created yet.
+- Altibox port-forward (80/443 only, not DMZ) - not done yet.
+- DNS/hostname (myQNAPcloud free DDNS, decided earlier) - not chosen/
+  configured yet.
+- QNAP firewall sanity check once the above is live.
