@@ -459,10 +459,13 @@ there is two hops, easy to conflate:
    (varies by QNAP volume label - `which docker` from an interactive host
    login finds it).
 
-   Worth saving as an SSH config alias so it's just `ssh automower`:
+   Worth saving as an SSH config alias so it's just `ssh automower`. **This
+   file lives on your own machine — wherever you run `ssh` *from* — not on
+   the QNAP or inside the container**, since it configures your local SSH
+   client's behavior, not anything remote:
 
    ```
-   # ~/.ssh/config
+   # ~/.ssh/config  (on your own machine, e.g. C:\Users\<you>\.ssh\config on Windows)
    Host automower
        HostName <qnap-ip>
        User <user>
