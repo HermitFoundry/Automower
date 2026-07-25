@@ -518,6 +518,14 @@ Container → Network):
 ssh -L <local-port>:<container-ip>:5152 <user>@<qnap-ip>
 ```
 
+e.g., with this account's actual values (container IP from Container Station
+→ Edit Container → Network, `15152` as the local port since `5152` was
+already taken by a locally-running copy of the app):
+
+```
+ssh -L 15152:10.0.3.2:5152 terje@192.168.10.142
+```
+
 then browse to `http://127.0.0.1:<local-port>` (use the literal
 `127.0.0.1`, not `localhost` — Windows OpenSSH's `-L` sometimes only binds
 the IPv4 loopback, while `localhost` can resolve to `::1` first and find
