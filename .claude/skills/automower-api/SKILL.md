@@ -639,6 +639,34 @@ Base URL: `https://api.amc.husqvarna.dev/v1`
   meaningless placeholder (observed: always `0`) instead, so
   `"electronic": false` in that file skips the conversion entirely rather
   than showing a plausible-but-wrong number.
+- **`MapStaticAssets()` was silently broken in this preview SDK's
+  Production mode** - not an `AutomowerWeb`-specific bug, a framework-level
+  one. Confirmed by direct testing (2026-07-25): every static asset,
+  including `_framework/blazor.web.js` itself (not just `app.css`), came
+  back as a `200 OK` with `Content-Length: 0` in Production - meaning the
+  app would have been completely non-interactive (no Blazor Server circuit
+  can establish without its own JS loading), not just unstyled. This
+  reproduced identically from a full `dotnet publish` output with the
+  compressed/manifest assets genuinely present on disk - it was never a
+  build-vs-publish problem, ruling out the fix originally assumed (see
+  `startweb.sh`'s git history for that now-superseded reasoning). Fixed by
+  dropping `MapStaticAssets()`/`@Assets[...]` entirely in favor of the
+  classic `UseStaticFiles()` middleware + plain literal asset paths
+  (`Program.cs`, `App.razor`, `ReconnectModal.razor`) - a manual `?v=` query
+  string (`AppInfo.Version`) substitutes for the cache-busting the
+  fingerprinted filenames used to give for free. That swap uncovered two
+  more real issues, both now fixed: `UseStaticFiles()` resolves `wwwroot`
+  relative to the app's **content root**, which defaults to the *launching
+  shell's current directory* (not the app's own location) unless set
+  explicitly - `Program.cs` now anchors it to `AppContext.BaseDirectory`.
+  And a plain `dotnet build` output never physically copies `wwwroot` at
+  all (ASP.NET Core's static web assets are manifest-referenced back into
+  the *source* tree for a build, which only `MapStaticAssets()` ever
+  understood) - `dotnet publish` is what actually produces the physical
+  copy, confirmed to happen under `-c Debug` too, not just `-c Release`, so
+  `startweb.dev` (the local/LAN Development-mode alternative to
+  `startweb.sh`) publishes too now, just faster (`-c Debug`) and to its own
+  output directory.
 - **The app trusts the host's system-local clock everywhere, uniformly** —
   `DateTimeOffset.Now` (`TrackingService.cs`'s poll timestamps,
   `ScheduleService.NextCalendarStart`'s day-boundary math) and

@@ -5,17 +5,15 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="/" />
-    <ResourcePreloader />
-    <link rel="stylesheet" href="@Assets["app.css"]" />
-    <link rel="stylesheet" href="@Assets["AutomowerWeb.styles.css"]" />
-    <ImportMap />
+    <link rel="stylesheet" href="app.css?v=@AppInfo.Version" />
+    <link rel="stylesheet" href="AutomowerWeb.styles.css?v=@AppInfo.Version" />
     <HeadOutlet @rendermode="InteractiveServer" />
 </head>
 
 <body>
     <Routes @rendermode="InteractiveServer" />
     <ReconnectModal />
-    <script src="@Assets["_framework/blazor.web.js"]"></script>
+    <script src="_framework/blazor.web.js"></script>
 </body>
 
 </html>

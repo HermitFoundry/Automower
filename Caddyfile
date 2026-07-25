@@ -1,0 +1,36 @@
+# Reverse proxy for AutomowerWeb - the only container with 80/443 published
+# to the QNAP host (see README's "Public deployment" section / the plan in
+# qnap_infrastructure_setup.md for the full architecture). Caddy handles
+# TLS automatically via Let's Encrypt once AUTOMOWER_HOSTNAME actually
+# resolves to this NAS's public IP and 80/443 are reachable from the
+# internet (both needed for the ACME HTTP challenge).
+#
+# Both env vars are required (no defaults) - deliberately, so a
+# misconfigured container fails obviously at startup instead of silently
+# proxying nowhere or serving on an unintended hostname:
+#   AUTOMOWER_HOSTNAME  - the public hostname, e.g. something.myqnapcloud.com
+#   AUTOMOWER_UPSTREAM  - where AutomowerWeb is actually reachable FROM
+#                         INSIDE THIS CONTAINER. Not "localhost" - that's
+#                         this container, not the QNAP host or the
+#                         AutomowerWeb container. Use the QNAP's own LAN IP
+#                         plus AutomowerWeb's published port (e.g.
+#                         192.168.10.142:5152) - going back out via the
+#                         host's network rather than relying on
+#                         inter-container Docker networking, which wasn't
+#                         verified to work on this QNAP's LXD-backed bridge.
+#
+# Run with a persistent /data mount (e.g. -v caddy-data:/data) - that's
+# where Caddy stores its Let's Encrypt certificate/account state; without
+# it, every container recreate re-requests a fresh cert and risks Let's
+# Encrypt's rate limits.
+{$AUTOMOWER_HOSTNAME} {
+    reverse_proxy {$AUTOMOWER_UPSTREAM}
+
+    # Cheap upgrade path if/when auth is wanted later - uncomment and set
+    # AUTOMOWER_BASIC_AUTH_HASH (a bcrypt hash, via `caddy hash-password`)
+    # as another env var. One line, no code change needed in AutomowerWeb
+    # itself.
+    # basicauth {
+    #     terje {$AUTOMOWER_BASIC_AUTH_HASH}
+    # }
+}

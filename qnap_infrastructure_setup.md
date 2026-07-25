@@ -151,3 +151,51 @@ reset `/etc/config/ssh/sshd_config` back to `AllowTcpForwarding no`, and the
 symptom will be the exact same "administratively prohibited" error with no
 obvious cause. If SSH tunneling to this NAS mysteriously stops working
 again, re-check this file first before assuming something else broke.
+
+## Public deployment: the two new containers
+
+See `README.md`'s "Public deployment" section for the overall architecture
+(Caddy is the only container with published 80/443, reverse-proxying to
+AutomowerWeb's own container over the QNAP's own LAN IP rather than
+unverified inter-container Docker networking) and `Caddyfile` for the proxy
+config itself. From the QNAP host shell, using the full `docker` path (see
+"Reaching the container" above for why a bare `docker` fails here):
+
+**`AutomowerWeb` container** - same base setup as the existing `track`
+container (Debian, `bootstrap.sh`-provisioned), same `/repos/Automower`
+bind mount so it sees the same `.config`/`.data`/git checkout, but with a
+**real** Docker port publish this time - Container Station's after-the-fact
+"Default web URL port" edit is confirmed not to create one (see "Container
+Station networking" above), so create it with an explicit `-p` up front
+instead of fighting that UI again:
+
+```bash
+DOCKER=/share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker
+$DOCKER run -d --name automowerweb \
+    -p 5152:5152 \
+    -v /share/Repos/Automower:/repos/Automower \
+    debian:latest \
+    sleep infinity
+# then: docker exec into it, run ./bootstrap.sh, git clone/checkout, ./startweb.sh
+```
+
+(exact base image/provisioning command to be confirmed against whatever the
+existing `track` container was actually created with - not verified against
+this account's real setup yet, since the container hasn't been created.)
+
+**`Caddy` container** - the only one with 80/443 published, needs the
+`Caddyfile` mounted in and a persistent volume for its Let's Encrypt state:
+
+```bash
+$DOCKER run -d --name automower-caddy \
+    -p 80:80 -p 443:443 \
+    -v /share/Repos/Automower/Caddyfile:/etc/caddy/Caddyfile:ro \
+    -v caddy-data:/data \
+    -e AUTOMOWER_HOSTNAME=<the chosen myQNAPcloud/hermit.no hostname> \
+    -e AUTOMOWER_UPSTREAM=192.168.10.142:5152 \
+    caddy:latest
+```
+
+Both commands are starting points, not yet run/verified against the real
+NAS - update this note once they've actually been executed, same as every
+other infra fact in this file.

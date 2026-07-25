@@ -2,10 +2,14 @@
 # Starts AutomowerWeb in a detached tmux session (survives SSH/docker exec
 # disconnects - same reasoning as startall.sh's per-mower track sessions),
 # bound to all interfaces so it's reachable from outside the container - see
-# README's "Web dashboard" section. Builds once, then runs the compiled
-# .dll directly rather than 'dotnet run' - same reasoning as am.sh: 'dotnet
-# run' doesn't reliably forward SIGINT to the process it spawns, which would
-# break a graceful Ctrl+C stop via stopweb.sh.
+# README's "Web dashboard" section. Publishes once (see below for why
+# publish, not build), then runs the compiled .dll directly rather than
+# 'dotnet run' - same reasoning as am.sh: 'dotnet run' doesn't reliably
+# forward SIGINT to the process it spawns, which would break a graceful
+# Ctrl+C stop via stopweb.sh.
+#
+# For a faster-iterating local/LAN alternative (plain 'dotnet build',
+# Development mode, not safe to expose publicly), see startweb.dev instead.
 #
 # Session name deliberately does NOT start with "automower-" (unlike the
 # per-mower track sessions, "automower-AM430X" etc.) so startall.sh/
@@ -14,20 +18,17 @@
 # starting/stopping the mowers' track loops, and shouldn't get bundled into
 # "stop everything" by a naming coincidence.
 #
-# ASPNETCORE_ENVIRONMENT=Development, deliberately: without it, this
-# defaults to Production, and .NET 9+'s MapStaticAssets() static-file
-# pipeline serves every asset (app.css, the Blazor JS) as a 200 OK with an
-# empty body - it expects publish-time asset processing (compression,
-# manifest) that a plain 'dotnet build' never generates, and Production
-# mode has no fallback for that; Development mode serves straight from
-# wwwroot instead and doesn't need it. Confirmed by direct repro: identical
-# launch command, only the environment variable differed, empty body vs a
-# real file both times. TODO before this is ever exposed beyond a LAN/SSH
-# tunnel: Development mode also enables the detailed exception page, which
-# would leak stack traces to the internet - the real fix then is
-# 'dotnet publish' + running the published output, not this env var, but
-# that's a bigger change deferred until public exposure is actually being
-# set up (see README's "Not yet deployed anywhere").
+# Runs from a 'dotnet publish' output, not a plain 'dotnet build' one -
+# .NET 9+'s MapStaticAssets() static-file pipeline (used by Program.cs/
+# App.razor's @Assets[...]) needs publish-time asset processing
+# (compression, a manifest) that 'dotnet build' never generates; without
+# it, Production mode serves every static asset (app.css, the Blazor JS)
+# as a 200 OK with an empty body. This used to be worked around with
+# ASPNETCORE_ENVIRONMENT=Development (Development mode serves straight
+# from wwwroot, sidestepping the issue) - not safe once this is
+# internet-facing, since Development also enables the detailed exception
+# page (leaks stack traces). Publishing instead of building is the
+# officially-supported fix and needed no code changes elsewhere.
 set -euo pipefail
 
 dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,12 +46,18 @@ if tmux has-session -t "$session" 2>/dev/null; then
     exit 0
 fi
 
-dll="$dir/AutomowerWeb/bin/Debug/net10.0/AutomowerWeb.dll"
-dotnet build "$dir/AutomowerWeb/AutomowerWeb.csproj" -v quiet
+# No explicit -o: the default publish location (bin/Release/<TFM>/publish)
+# sits inside 'bin/', which the SDK already excludes from its own source
+# globbing - an earlier attempt publishing to AutomowerWeb/publish (a
+# custom folder *inside* the project directory) got picked up as project
+# *source content* by that same globbing, causing a real build error
+# (BLAZOR106, a copied .razor.js file with no matching component).
+dll="$dir/AutomowerWeb/bin/Release/net10.0/publish/AutomowerWeb.dll"
+dotnet publish "$dir/AutomowerWeb/AutomowerWeb.csproj" -c Release -v quiet
 
 mkdir -p "$dir/.data"
 log="$dir/.data/startweb.log"
-tmux new-session -d -c "$dir" -s "$session" bash -c "ASPNETCORE_ENVIRONMENT=Development dotnet '$dll' --urls http://0.0.0.0:$port > '$log' 2>&1"
+tmux new-session -d -c "$dir" -s "$session" bash -c "dotnet '$dll' --urls http://0.0.0.0:$port > '$log' 2>&1"
 
 # 'tmux new-session -d' returns immediately, before the app has actually
 # bound its port - a crash (e.g. "address already in use" from a leftover

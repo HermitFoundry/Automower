@@ -44,19 +44,22 @@ else
     ln -sf /usr/local/dotnet/dotnet /usr/local/bin/dotnet
 fi
 
-echo "== PATH wrappers (am, startall, stopall, startweb, stopweb) =="
-# Thin delegating wrappers, not symlinks: am.sh/startall.sh/stopall.sh/
-# startweb.sh/stopweb.sh find their own repo root via 'dirname
-# "${BASH_SOURCE[0]}"', which a symlink on PATH would break (it'd resolve to
-# the symlink's own directory instead of the repo). A separate wrapper file
-# that execs the real script by its resolved absolute path sidesteps that
-# entirely - and bakes in wherever this repo actually lives ($dir, resolved
-# above from bootstrap.sh's own location), rather than hardcoding
-# /repos/Automower.
-for name in am startall stopall startweb stopweb; do
-    printf '#!/usr/bin/env bash\nexec "%s/%s.sh" "$@"\n' "$dir" "$name" > /usr/local/bin/"$name"
-    chmod +x /usr/local/bin/"$name"
-    echo "  installed /usr/local/bin/$name -> $dir/$name.sh"
+echo "== PATH wrappers (am, startall, stopall, startweb, stopweb, startweb.dev, stopweb.dev) =="
+# Thin delegating wrappers, not symlinks: the underlying scripts find their
+# own repo root via 'dirname "${BASH_SOURCE[0]}"', which a symlink on PATH
+# would break (it'd resolve to the symlink's own directory instead of the
+# repo). A separate wrapper file that execs the real script by its resolved
+# absolute path sidesteps that entirely - and bakes in wherever this repo
+# actually lives ($dir, resolved above from bootstrap.sh's own location),
+# rather than hardcoding /repos/Automower.
+for name in am.sh startall.sh stopall.sh startweb.sh stopweb.sh startweb.dev stopweb.dev; do
+    # Wrapper's own PATH name drops a trailing ".sh" (am.sh -> am) but
+    # leaves startweb.dev/stopweb.dev exactly as-is - they have no ".sh" to
+    # drop in the first place.
+    wrapper_name="${name%.sh}"
+    printf '#!/usr/bin/env bash\nexec "%s/%s" "$@"\n' "$dir" "$name" > /usr/local/bin/"$wrapper_name"
+    chmod +x /usr/local/bin/"$wrapper_name"
+    echo "  installed /usr/local/bin/$wrapper_name -> $dir/$name"
 done
 
 echo "Done. Verify with: dotnet --version && tmux -V && git --version && curl --version && date && am help"

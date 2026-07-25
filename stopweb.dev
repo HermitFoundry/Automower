@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Identical to stopweb.sh - both startweb.sh (production, publish-based)
+# and startweb.dev (Development-mode, build-based) use the same tmux
+# session name ("automowerweb"), so there's nothing dev-specific to do
+# here; this file exists purely so the start/stop pair reads consistently
+# (startweb.sh/stopweb.sh, startweb.dev/stopweb.dev) rather than sharing
+# one stop script across two differently-named start scripts.
+set -uo pipefail
+
+session="automowerweb"
+
+if ! tmux has-session -t "$session" 2>/dev/null; then
+    echo "$session is not running."
+    exit 0
+fi
+
+echo "Stopping $session..."
+tmux send-keys -t "$session" C-c
+
+sleep 3
+
+if tmux has-session -t "$session" 2>/dev/null; then
+    echo "  didn't stop gracefully in time - force-killing"
+    tmux kill-session -t "$session"
+else
+    echo "  stopped cleanly"
+fi
