@@ -440,24 +440,44 @@ to `AutomowerWeb` (`Server: Kestrel`) → the `dotnet publish` static-asset
 fix serving real content (`Content-Length: 7410`, not `0`) - all the way
 from a real external network, not just LAN-internal `curl`.
 
-**`-4` matters**: a plain `curl https://Terje-TS673A.myqnapcloud.com/`
-tried the AAAA (IPv6) record first and got `SEC_E_UNTRUSTED_ROOT` / "self
-signed certificate" - IPv6 doesn't go through the router's NAT/port-forward
-rules the way IPv4 does (those are IPv4-specific NAT concepts; IPv6 hosts
-are globally routable directly), and Docker's `-p` port publish doesn't
-cover IPv6 either by default. That request likely reached QTS's own admin
-HTTPS interface directly instead of Caddy - a separate, pre-existing
-exposure path, not something this deployment created, but worth knowing
-about. Not investigated/fixed further - if it matters, the fix is almost
-certainly in the QNAP's own IPv6 firewall rules (Control Panel → Security →
-Firewall), blocking unsolicited inbound IPv6 to everything except what's
-deliberately exposed, same principle as the IPv4 forward rules above.
+**Real security hole found and fixed, 2026-07-25: browsers landed on the
+QTS admin login instead of the dashboard.** Root cause: a plain (dual-stack)
+`curl https://Terje-TS673A.myqnapcloud.com/` tried the AAAA (IPv6) record
+first and got `SEC_E_UNTRUSTED_ROOT` / "self signed certificate" - IPv6
+doesn't go through the router's NAT/port-forward rules the way IPv4 does
+(those are IPv4-specific NAT concepts; IPv6 hosts are globally routable
+directly), and Docker's `-p` port publish doesn't cover IPv6 either by
+default. The request was reaching QTS's own admin HTTPS interface directly
+instead of Caddy - confirmed by the user's own browser landing on the QTS
+login page, not just a curl-only artifact.
+
+There's no dedicated port/protocol firewall app on this NAS/QTS build
+(Control Panel → Security only has an IP-based Allow/Deny list, Access
+Protection, etc. - no per-port rules, and doesn't distinguish IPv4/IPv6).
+Note QTS's own `System → Security → Allow/Deny List` page is *not* the
+right tool here even if it looks like it should be.
+
+**Fix: disabled IPv6 entirely on the NAS's own network interface** -
+Control Panel → **Network & File Services → Network & Virtual Switch** →
+Interfaces → the adapter's IPv6 settings. Nothing on this NAS actually
+needs IPv6 (Caddy was never listening on it, nor was anything else meant
+to be), so this has no downside. QTS itself flagged this exact scenario
+unprompted with a dialog on that page: *"Starting with QTS and QuTS hero
+version 5.2.1, IPv6 is disabled by default in Network & Virtual Switch. If
+you have already enabled IPv6, it is recommended to disable it to reduce
+security risks."* - this NAS had it enabled from before that default
+changed, confirming this wasn't a one-off misconfiguration but a known
+QNAP-acknowledged risk class.
+
+**Verified fixed**: `nslookup Terje-TS673A.myqnapcloud.com` against 1.1.1.1
+now returns only the A record (no AAAA at all - disabling IPv6 on the
+interface removed it from myQNAPcloud's DDNS registration too), and a
+plain `curl` (no `-4` needed anymore) correctly reaches Caddy → AutomowerWeb
+with a valid Let's Encrypt cert and real content.
 
 ### Still not done
 
-- **IPv6 exposure** (see above) - QTS's admin interface is reachable
-  directly over IPv6, bypassing Caddy entirely. Worth locking down via the
-  QNAP's firewall at some point; not urgent (still gated by QTS's own
-  admin login), not blocking the public dashboard.
-- QNAP IPv4 firewall sanity check - confirm Control Panel → Security →
-  Firewall isn't set to allow-all beyond what's actually needed.
+- QNAP IPv4-side sanity check - confirm `System → Security → Allow/Deny
+  List` isn't left more permissive than intended (currently "Allow all
+  connections" - fine for now since the only things actually reachable from
+  outside are what's deliberately forwarded: Caddy on 8880/8443).
