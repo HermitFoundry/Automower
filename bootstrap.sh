@@ -22,9 +22,15 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-echo "== apt packages (git, curl, tmux, tzdata) =="
+echo "== apt packages (git, curl, tmux, tzdata, ca-certificates) =="
 apt-get update
-apt-get install -y --no-install-recommends git curl tmux tzdata
+# ca-certificates: not guaranteed present on a fresh base image (confirmed
+# missing on a fresh debian:13 container) - without it, curl can't validate
+# any HTTPS connection at all, failing with "error setting certificate
+# file: /etc/ssl/certs/ca-certificates.crt" - which breaks the dotnet-
+# install.sh fetch below (an HTTPS URL) even though the plain-HTTP apt
+# packages above install fine without it.
+apt-get install -y --no-install-recommends git curl tmux tzdata ca-certificates
 
 echo "== timezone =="
 # Europe/Oslo, not the container's default (often UTC) - the mowers'
