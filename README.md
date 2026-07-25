@@ -442,16 +442,26 @@ then open the URL it prints (default `http://localhost:5152`).
 **On the QNAP container, run it via `startweb.sh`/`stopweb.sh`** instead of
 a plain `dotnet run` you'd have to babysit in a terminal — same pattern as
 `startall.sh`/`stopall.sh` for `track`: a detached tmux session that
-survives an SSH disconnect, building once and running the compiled `.dll`
-directly (not `dotnet run`, for the same graceful-Ctrl+C-forwarding reason
-as `am.sh`). Bound to all interfaces (`0.0.0.0:5152` by default,
-`./startweb.sh <port>` to override) so it's reachable from outside the
-container, not just `localhost`:
+survives an SSH disconnect, publishing once (`dotnet publish -c Release`,
+not `dotnet build` — see the comment in `startweb.sh` for why: this app
+needs a real physically-copied `wwwroot`, which only `publish` produces)
+and running the published `.dll` directly (not `dotnet run`, for the same
+graceful-Ctrl+C-forwarding reason as `am.sh`). Bound to all interfaces
+(`0.0.0.0:5152` by default, `./startweb.sh <port>` to override) so it's
+reachable from outside the container, not just `localhost`:
 
 ```
-./startweb.sh          # builds, starts in tmux session "automowerweb"
+./startweb.sh          # publishes (Release), starts in tmux session "automowerweb"
 ./stopweb.sh            # graceful stop (Ctrl+C, falls back to force-kill)
 ```
+
+**`startweb.dev`/`stopweb.dev`** are the same thing in
+`ASPNETCORE_ENVIRONMENT=Development` (a real exception page instead of a
+generic error — useful while debugging; `-c Debug` publish, faster than
+Release) instead of Production. Same tmux session name as `startweb.sh` —
+they're two alternate ways to run the same app, not meant to run at once.
+**Not safe to expose beyond a LAN/SSH tunnel** — Development mode leaks
+stack traces on any unhandled exception.
 
 **If you rebuild/pull new code, `startweb.sh` won't pick it up on its
 own** — a tmux session that's already running keeps whatever was loaded in
@@ -469,9 +479,46 @@ add another recurring source of auth traffic for a dashboard nobody's
 continuously watching. It loads once per page visit and on an explicit
 "🔄 Refresh" click instead.
 
-**Not yet deployed anywhere** — running it in its own container (separate
-from the one running `track`), exposing it via router port-forwarding, and
-adding auth are all separate, later steps, not part of what's built here.
+## Public deployment
+
+The dashboard is live at `https://Terje-TS673A.myqnapcloud.com/` — see
+`qnap_infrastructure_setup.md` for the QNAP-specific provisioning steps,
+and `Caddyfile` for the reverse-proxy config:
+
+```
+Internet --(Altibox: forward 80->8880, 443->8443 only, not the router's
+             "DMZ" feature, which forwards everything unfiltered and would
+             expose the QNAP's own admin UI/SSH too)--> QNAP LAN IP:8880/8443
+    --> [Caddy container]  (the only container with published host ports)
+            reverse_proxy --> <qnap-lan-ip>:5152 --> [AutomowerWeb container]
+```
+
+- **`AutomowerWeb` gets its own container**, separate from the one running
+  `track` — a public web server's crashes/restarts/attack surface
+  shouldn't share a blast radius with the always-on mower tracking. Both
+  bind-mount the same `/repos/Automower` host path, so both see the same
+  `.config`/`.data` and git checkout.
+- **`Caddy`** (official `caddy:latest` image) terminates TLS and gets
+  automatic Let's Encrypt certificates — see `Caddyfile`'s own comments for
+  the required `AUTOMOWER_HOSTNAME`/`AUTOMOWER_UPSTREAM` env vars and why
+  the upstream target is the QNAP's LAN IP, not `localhost` (which inside a
+  container means that container, not the host or a sibling container).
+  Published on host ports **8880/8443**, not the standard 80/443 — QTS's own
+  admin interface already holds 443 on this NAS (confirmed via `netstat` on
+  the host before creating the container). Caddy itself doesn't care what
+  port traffic arrives on, so the Altibox forward just maps external 80/443
+  to these instead — Let's Encrypt's HTTP-01 challenge only needs the
+  *external* ports to be 80/443, not the internal ones.
+- **Hostname**: `Terje-TS673A.myqnapcloud.com` (free `myQNAPcloud` DDNS —
+  the NAS's one primary device hostname, not something per-service) — a
+  `hermit.no` subdomain remains an easy upgrade later if wanted.
+- **No authentication, deliberately** — the only data exposed is already
+  coarse/low-stakes: activity, battery, mower model/serial, and a
+  municipality-level place name (`LocationService` reverse-geocodes to
+  `zoom=12`, e.g. "Asker, Norway" — not precise enough to locate the
+  property), no controls. `Caddyfile` has a one-line `basicauth` upgrade
+  path commented in, ready whenever it's wanted, without touching
+  `AutomowerWeb` itself.
 
 ## Connecting to the QNAP container over SSH
 
@@ -489,13 +536,13 @@ there is two hops, easy to conflate:
 2. **Into the container, at the repo directory** — from that host shell:
 
    ```
-   docker exec -it -w /repos/Automower <container-id> bash
+   docker exec -it -w /repos/Automower <container-name-or-id> bash
    ```
 
    Combine both into one command from your own machine:
 
    ```
-   ssh <user>@<qnap-ip> -t "docker exec -it -w /repos/Automower <container-id> bash"
+   ssh <user>@<qnap-ip> -t "docker exec -it -w /repos/Automower <container-name-or-id> bash"
    ```
 
    `docker` isn't on `PATH` for a non-interactive shell like that `-t`
@@ -515,7 +562,7 @@ there is two hops, easy to conflate:
    Host automower
        HostName <qnap-ip>
        User <user>
-       RemoteCommand /share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker exec -it -w /repos/Automower <container-id> bash
+       RemoteCommand /share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker exec -it -w /repos/Automower <container-name-or-id> bash
        RequestTTY yes
    ```
 

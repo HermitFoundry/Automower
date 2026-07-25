@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Dev-mode sibling of startweb.sh - same tmux/log/port-conflict machinery,
+# runs in ASPNETCORE_ENVIRONMENT=Development (a real exception page instead
+# of a generic error, useful while debugging) instead of startweb.sh's
+# Production setup. Kept around as a local/LAN testing path now that
+# startweb.sh itself is the production-safe one - not safe to expose beyond
+# a LAN/SSH tunnel, Development mode leaks stack traces on any unhandled
+# exception. Revisit later whether this is still worth keeping alongside
+# startweb.sh, or whether 'dotnet watch run' covers the same local-iteration
+# need better - not resolved yet, keeping both for now.
+#
+# Also publishes, same as startweb.sh (just '-c Debug', faster than
+# Release) - NOT a plain 'dotnet build' like this script originally did.
+# Program.cs now uses UseStaticFiles() (see its own comment for why -
+# MapStaticAssets() turned out to be broken in this SDK's Production mode),
+# which needs a real physically-copied wwwroot folder next to the app - a
+# plain 'dotnet build' output never has one (ASP.NET Core's static web
+# assets are manifest-referenced back into the source tree instead, which
+# only MapStaticAssets() understands); 'dotnet publish' is what actually
+# produces the physical copy, confirmed to still happen under '-c Debug'
+# too, not just '-c Release'. Own publish directory
+# (bin/Debug/net10.0/publish) so this never collides with startweb.sh's
+# Release one.
+#
+# Same tmux session name ("automowerweb") as startweb.sh, deliberately -
+# these are two alternate ways to run the same app, not meant to run at the
+# same time; stopweb.sh/stopweb.dev both stop whichever one happens to be
+# up.
+set -euo pipefail
+
+dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$dir"
+session="automowerweb"
+port="${1:-5152}"
+
+if ! command -v tmux >/dev/null 2>&1; then
+    echo "tmux not found. Install it first, e.g.: apt-get update && apt-get install -y tmux" >&2
+    exit 1
+fi
+
+if tmux has-session -t "$session" 2>/dev/null; then
+    echo "$session is already running - run ./stopweb.sh (or ./stopweb.dev) first if you want to restart it with freshly built code."
+    exit 0
+fi
+
+dll="$dir/AutomowerWeb/bin/Debug/net10.0/publish/AutomowerWeb.dll"
+dotnet publish "$dir/AutomowerWeb/AutomowerWeb.csproj" -c Debug -v quiet
+
+mkdir -p "$dir/.data"
+log="$dir/.data/startweb.log"
+tmux new-session -d -c "$dir" -s "$session" bash -c "ASPNETCORE_ENVIRONMENT=Development dotnet '$dll' --urls http://0.0.0.0:$port > '$log' 2>&1"
+
+# 'tmux new-session -d' returns immediately, before the app has actually
+# bound its port - a crash (e.g. "address already in use" from a leftover
+# process holding $port) closes the pane almost instantly, and a naive
+# "Started" message printed right after would be a lie. Poll briefly for
+# either a clean startup or the session dying, so a failure is reported
+# here instead of only discoverable later via a manual 'tmux ls'/log check.
+started=false
+for _ in $(seq 1 10); do
+    if ! tmux has-session -t "$session" 2>/dev/null; then
+        break
+    fi
+    if grep -q "Now listening on" "$log" 2>/dev/null; then
+        started=true
+        break
+    fi
+    sleep 1
+done
+
+if [ "$started" = true ]; then
+    echo "Started $session (dev mode) on port $port (log: $log)."
+    echo "'tmux attach -t $session' to check on it; ./stopweb.sh or ./stopweb.dev to stop it."
+else
+    echo "AutomowerWeb failed to start (crashed, or didn't bind within 10s) - last log lines:" >&2
+    echo "---" >&2
+    tail -20 "$log" >&2
+    echo "---" >&2
+
+    if grep -qi "address already in use" "$log" 2>/dev/null; then
+        echo "Port $port is already held by another process - probably a leftover" >&2
+        echo "'dotnet run --project AutomowerWeb' from manual testing, not this script" >&2
+        echo "(the tmux session above already crashed and closed itself)." >&2
+        echo >&2
+        stale=$(ps -ef | grep -i "[A]utomowerweb")
+        if [ -n "$stale" ]; then
+            echo "Processes to kill:" >&2
+            echo "$stale" >&2
+            echo >&2
+            echo "  kill $(echo "$stale" | awk '{print $2}' | tr '\n' ' ')" >&2
+            echo "(add -9 if plain kill doesn't stop them within a few seconds), then re-run ./startweb.dev." >&2
+        else
+            echo "Couldn't find it via 'ps -ef | grep -i automowerweb' - check 'ss -tlnp' or" >&2
+            echo "'netstat -tlnp' for whatever's actually bound to port $port." >&2
+        fi
+    fi
+
+    echo >&2
+    echo "Full log: $log" >&2
+    exit 1
+fi

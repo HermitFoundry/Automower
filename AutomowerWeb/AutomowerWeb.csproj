@@ -5,6 +5,15 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
+    <!-- Avoids a hard dependency on libicu, which a plain 'dotnet-install.sh'
+         tarball install never pulls in (unlike an apt-based install, which
+         gets it automatically as a package dependency) - hit for real
+         provisioning a fresh container: just running "dotnet" to check its
+         version crashed outright with "Couldn't find a valid ICU package"
+         otherwise. Safe here specifically because this app already formats
+         everything via CultureInfo.InvariantCulture explicitly throughout -
+         it was never relying on real locale-aware behavior to begin with. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
     <!-- MinVer computes the version from the nearest 'v*' git tag reachable
          from HEAD plus commit height/sha - see the 'v0.9.0' tag at the repo
