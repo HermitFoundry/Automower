@@ -481,9 +481,9 @@ continuously watching. It loads once per page visit and on an explicit
 
 ## Public deployment
 
-Target architecture for exposing the dashboard to the internet (work in
-progress — see `qnap_infrastructure_setup.md` for the QNAP-specific steps,
-and `Caddyfile` for the reverse-proxy config):
+The dashboard is live at `https://Terje-TS673A.myqnapcloud.com/` — see
+`qnap_infrastructure_setup.md` for the QNAP-specific provisioning steps,
+and `Caddyfile` for the reverse-proxy config:
 
 ```
 Internet --(Altibox: forward 80->8880, 443->8443 only, not the router's
@@ -509,7 +509,8 @@ Internet --(Altibox: forward 80->8880, 443->8443 only, not the router's
   port traffic arrives on, so the Altibox forward just maps external 80/443
   to these instead — Let's Encrypt's HTTP-01 challenge only needs the
   *external* ports to be 80/443, not the internal ones.
-- **Hostname**: `terjes.myqnapcloud.com` (free `myQNAPcloud` DDNS) — a
+- **Hostname**: `Terje-TS673A.myqnapcloud.com` (free `myQNAPcloud` DDNS —
+  the NAS's one primary device hostname, not something per-service) — a
   `hermit.no` subdomain remains an easy upgrade later if wanted.
 - **No authentication, deliberately** — the only data exposed is already
   coarse/low-stakes: activity, battery, mower model/serial, and a
