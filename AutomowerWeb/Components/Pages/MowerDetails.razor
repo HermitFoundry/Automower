@@ -3,6 +3,8 @@
 @inject MowerDetailService MowerDetailService
 @inject ScheduleService ScheduleService
 @inject TrackingService TrackingService
+@inject LocationService LocationService
+@inject WeatherService WeatherService
 
 <PageTitle>@Name - Automower</PageTitle>
 
@@ -47,6 +49,16 @@ else if (_detail is not null && _stored is not null)
         <dd>@_stored.Model</dd>
         <dt>Serial number</dt>
         <dd>@_stored.SerialNumber</dd>
+        @if (_location is not null)
+        {
+            <dt>Location</dt>
+            <dd>📍 @_location</dd>
+        }
+        @if (_weather is not null)
+        {
+            <dt>Weather</dt>
+            <dd>@MowerDisplay.WeatherIcon(_weather) @_weather.TemperatureCelsius.ToString("F0")°C, @MowerDisplay.WeatherLabel(_weather.WeatherCode)</dd>
+        }
     </dl>
 
     <section>
@@ -64,12 +76,16 @@ else if (_detail is not null && _stored is not null)
                     {
                         <tr>
                             <td>@wa.Name.Trim()</td>
-                            <td>@wa.CuttingHeight</td>
+                            <td>@CuttingHeightEstimator.Label(wa.CuttingHeight, a.System.Model)</td>
                             <td>@(wa.Enabled ? "✅" : "❌")</td>
                         </tr>
                     }
                 </tbody>
             </table>
+            <p class="muted small">
+                cm figures are an estimate (min/max blade height isn't exposed by
+                the API) - the app's own display may differ slightly.
+            </p>
         }
     </section>
 
@@ -186,8 +202,8 @@ else if (_detail is not null && _stored is not null)
     <section>
         <h2>⚙️ Settings &amp; capabilities</h2>
         <dl class="mower-facts">
-            <dt>Cutting height</dt>
-            <dd>@(a.Settings?.CuttingHeight?.ToString() ?? "—")</dd>
+            <dt>Cutting height (dial)</dt>
+            <dd>@(a.Settings?.CuttingHeight?.ToString() ?? "—") <span class="muted small">of 9</span></dd>
             <dt>Headlight mode</dt>
             <dd>@MowerDisplay.HeadlightModeLabel(a.Settings?.Headlight?.Mode)</dd>
         </dl>
@@ -252,6 +268,8 @@ else if (_detail is not null && _stored is not null)
     private List<TrackSession> _sessions = [];
     private List<DailyActivity> _days = [];
     private List<MessageItem> _messages = [];
+    private string? _location;
+    private WeatherInfo? _weather;
 
     protected override async Task OnInitializedAsync()
     {
@@ -271,6 +289,13 @@ else if (_detail is not null && _stored is not null)
                 .OrderByDescending(m => m.Time)
                 .Take(20)
                 .ToList();
+
+            var position = (_detail.Attributes.Positions ?? []).FirstOrDefault();
+            if (position is not null)
+            {
+                _location = await LocationService.GetPlaceNameAsync(position.Latitude, position.Longitude);
+                _weather = await WeatherService.GetCurrentWeatherAsync(position.Latitude, position.Longitude);
+            }
         }
         catch (Exception ex)
         {

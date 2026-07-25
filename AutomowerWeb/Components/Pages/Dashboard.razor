@@ -2,6 +2,8 @@
 @inject MowerService MowerService
 @inject MowerDetailService MowerDetailService
 @inject TrackingService TrackingService
+@inject LocationService LocationService
+@inject WeatherService WeatherService
 
 <PageTitle>Automower Dashboard</PageTitle>
 
@@ -46,6 +48,16 @@ else if (_cards.Count == 0 && _error is null)
                 <dd>@(card.Connected ? "✅ yes" : "❌ no")</dd>
                 <dt>Next start</dt>
                 <dd>@card.NextStartLabel</dd>
+                @if (card.Location is not null)
+                {
+                    <dt>Location</dt>
+                    <dd>📍 @card.Location</dd>
+                }
+                @if (card.Weather is not null)
+                {
+                    <dt>Weather</dt>
+                    <dd>@MowerDisplay.WeatherIcon(card.Weather) @card.Weather.TemperatureCelsius.ToString("F0")°C, @MowerDisplay.WeatherLabel(card.Weather.WeatherCode)</dd>
+                }
             </dl>
 
             <h3>📅 Today</h3>
@@ -134,6 +146,19 @@ else if (_cards.Count == 0 && _error is null)
                     sessions.Where(s => s.Start.Date == DateTimeOffset.Now.Date));
                 var lastWeek = TrackingService.SummarizeDailyActivity(mower.Name).Take(7).ToList();
 
+                // Newest breadcrumb (Positions[0]) as "where is it right
+                // now" - absent for a mower with no GPS capability/fix, in
+                // which case both just come back null and the card simply
+                // omits those two rows (see the @if checks in the markup).
+                var position = (a.Positions ?? []).FirstOrDefault();
+                string? location = null;
+                WeatherInfo? weather = null;
+                if (position is not null)
+                {
+                    location = await LocationService.GetPlaceNameAsync(position.Latitude, position.Longitude);
+                    weather = await WeatherService.GetCurrentWeatherAsync(position.Latitude, position.Longitude);
+                }
+
                 cards.Add(new MowerCard(
                     mower.Name,
                     a.Mower.Activity,
@@ -142,6 +167,8 @@ else if (_cards.Count == 0 && _error is null)
                     a.Battery.RemainingChargingTime,
                     MowerDisplay.WorkAreaName(a),
                     MowerDisplay.NextStartLabel(a),
+                    location,
+                    weather,
                     today,
                     lastWeek));
             }
@@ -169,6 +196,8 @@ else if (_cards.Count == 0 && _error is null)
         long RemainingChargingSeconds,
         string? WorkAreaName,
         string NextStartLabel,
+        string? Location,
+        WeatherInfo? Weather,
         List<TrackSession> TodaySessions,
         List<DailyActivity> LastWeek);
 }

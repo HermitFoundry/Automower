@@ -119,16 +119,50 @@ public static class MowerDisplay
         _ => mode,
     };
 
-    // For the "Operation" (lifetime statistics) section - FormatDuration
-    // (h/m) reads fine for a session or a day, but a lifetime running-time
-    // counter is routinely 1000+ hours, where "1716h58m" stops being
-    // readable. Falls back to FormatDuration under a day, where it's still
-    // the more natural unit.
-    public static string LifetimeDuration(long seconds)
-    {
-        var span = TimeSpan.FromSeconds(seconds);
-        return span.TotalDays >= 1 ? $"{(int)span.TotalDays}d {span.Hours}h" : span.FormatDuration();
-    }
+    // For the "Operation" (lifetime statistics) section - plain hours
+    // (with thousands separators, e.g. "1,716h"), matching how Husqvarna's
+    // own app presents these same lifetime counters, rather than
+    // FormatDuration's h/m format (tuned for session/day-scale durations,
+    // not a multi-year cumulative total).
+    public static string LifetimeDuration(long seconds) => $"{Math.Round(TimeSpan.FromSeconds(seconds).TotalHours):N0}h";
 
     public static string Distance(long meters) => meters >= 1000 ? $"{meters / 1000.0:F1} km" : $"{meters} m";
+
+    // WMO weather interpretation codes, per Open-Meteo's documented mapping
+    // (https://open-meteo.com/en/docs - "WMO Weather interpretation codes").
+    // Only the day/night split for clear/mostly-clear actually changes the
+    // icon; every other code reads the same regardless of time of day.
+    public static string WeatherIcon(WeatherInfo weather) => weather.WeatherCode switch
+    {
+        0 => weather.IsDay ? "☀️" : "🌙",
+        1 or 2 => weather.IsDay ? "🌤️" : "🌙",
+        3 => "☁️",
+        45 or 48 => "🌫️",
+        51 or 53 or 55 or 56 or 57 => "🌦️",
+        61 or 63 or 65 or 66 or 67 => "🌧️",
+        71 or 73 or 75 or 77 => "❄️",
+        80 or 81 or 82 => "🌦️",
+        85 or 86 => "🌨️",
+        95 or 96 or 99 => "⛈️",
+        _ => "🌡️",
+    };
+
+    public static string WeatherLabel(int weatherCode) => weatherCode switch
+    {
+        0 => "Clear sky",
+        1 => "Mainly clear",
+        2 => "Partly cloudy",
+        3 => "Overcast",
+        45 or 48 => "Fog",
+        51 or 53 or 55 => "Drizzle",
+        56 or 57 => "Freezing drizzle",
+        61 or 63 or 65 => "Rain",
+        66 or 67 => "Freezing rain",
+        71 or 73 or 75 or 77 => "Snow",
+        80 or 81 or 82 => "Rain showers",
+        85 or 86 => "Snow showers",
+        95 => "Thunderstorm",
+        96 or 99 => "Thunderstorm with hail",
+        _ => "Unknown",
+    };
 }

@@ -612,6 +612,33 @@ Base URL: `https://api.amc.husqvarna.dev/v1`
   surfaced in `AutomowerWeb`'s `/mower/{name}` page - status facts at the
   top, Settings & capabilities and Operation (lifetime) sections at the
   bottom.
+- **Two different, easily-conflated "cuttingHeight" fields, on two different
+  scales** - `settings.cuttingHeight` (global, `SettingsInfo` in
+  `Models.cs`) is a **1-9 dial value**; `workAreas[].cuttingHeight`
+  (per-area, `WorkArea.CuttingHeight`) is a **percentage (0-100)** of the
+  mower model's adjustable blade-height range - confirmed against Home
+  Assistant's `husqvarna_automower` integration (`number.py`'s
+  `native_unit_of_measurement: PERCENTAGE` for the work-area one, plain
+  1-9 min/max for the global one). The Husqvarna app shows the per-area one
+  converted to cm - that per-model min/max range isn't exposed anywhere in
+  this API, so it can't be derived from the API response alone.
+  `AutomowerWeb/CuttingHeightEstimator.cs` estimates it anyway, using a
+  linear-interpolation formula and per-model min/max table from an
+  **unverified, third-party explanation** (no official Husqvarna citation):
+  `cm = min + percentage/100 * (max - min)`. Confirmed to match the real
+  app's own displayed value for this account's AM430X ("oversiden": API
+  `87` → estimate `5.5 cm`, matching the app exactly) - one confirmed data
+  point, not a guarantee for other models/values. The min/max/electronic
+  table lives in `AutomowerWeb/cutting-height-ranges.json` (tracked in git,
+  copied to the build output - **not** `.config/`, which is blanket-
+  gitignored for secrets and wrong for non-secret reference data like
+  this), specifically so a new mower model can be added by editing that
+  file, no code change/rebuild needed if edited directly in the output
+  directory. A model with **manual** (knob) height adjustment - e.g. the
+  308V - can't report its real height at all; the API just returns a
+  meaningless placeholder (observed: always `0`) instead, so
+  `"electronic": false` in that file skips the conversion entirely rather
+  than showing a plausible-but-wrong number.
 - **The app trusts the host's system-local clock everywhere, uniformly** —
   `DateTimeOffset.Now` (`TrackingService.cs`'s poll timestamps,
   `ScheduleService.NextCalendarStart`'s day-boundary math) and

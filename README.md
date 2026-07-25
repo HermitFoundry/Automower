@@ -409,13 +409,26 @@ Run the tests with `dotnet test`.
 ## Web dashboard (`AutomowerWeb`)
 
 A read-only Blazor Server app: a `/` dashboard (live status per mower —
-activity, battery, work area, connected, next start — plus that mower's
-sessions from *today only*) and a `/mower/{name}` details page per mower
-(full session history, daily rollup, work areas, stay-out zones, schedule,
-recent messages). No login yet, and deliberately no mower control anywhere
-in it — an unauthenticated public control surface for a physical outdoor
+activity, battery, work area, connected, next start, location, weather —
+plus that mower's sessions from *today only* and a 7-day rollup) and a
+`/mower/{name}` details page per mower (the same status facts up top, plus
+full session history, daily rollup, work areas, stay-out zones, schedule,
+recent messages, settings/capabilities, and lifetime operation statistics
+at the bottom). No login yet, and deliberately no mower control anywhere in
+it — an unauthenticated public control surface for a physical outdoor
 device is a different risk class than an unauthenticated read-only
 dashboard, and hasn't been asked for.
+
+**Location and weather** are derived from each mower's own latest GPS
+position (`positions[0]` in the API response - absent for a mower with no
+GPS fix, in which case those two rows are just omitted). Two free, keyless
+external services, called server-side: OpenStreetMap's **Nominatim** for
+reverse geocoding (place name cached indefinitely per mower - a charging
+station doesn't move meter-to-meter between polls) and **Open-Meteo** for
+current weather (cached 20 minutes, since it actually changes). This means
+`AutomowerWeb` needs outbound internet access to those two hosts, in
+addition to Husqvarna's own API - true for local dev, and something to keep
+in mind once it's running somewhere with more restricted egress.
 
 Run it locally the same way as any ASP.NET project, from the repo root so
 it can see `.config`/`.data`:

@@ -32,4 +32,16 @@
     <AssemblyMetadata Include="BuildDate" Value="$(BuildDateUtc)" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- CuttingHeightEstimator reads this from AppContext.BaseDirectory at
+         runtime - copy it next to the built AutomowerWeb.dll/.exe so it's
+         actually there regardless of how the app is launched (dotnet run,
+         the built .dll directly via startweb.sh, ...). PreserveNewest so a
+         hand-edit directly in the output dir (no rebuild) survives an
+         incremental build that doesn't touch this file. -->
+    <Content Update="cutting-height-ranges.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

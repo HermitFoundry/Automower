@@ -82,6 +82,13 @@ public record MowerAttributes
     [JsonPropertyName("calendar")]
     public CalendarInfo? Calendar { get; init; }
 
+    // GPS breadcrumb trail, newest first, capped at 50 entries - see
+    // SKILL.md's Gotchas for the "not work-area boundary data" caveat.
+    // Absent/empty when capabilities.position is false, or occasionally
+    // even when true (e.g. a mower with a weak/no recent GPS fix).
+    [JsonPropertyName("positions")]
+    public PositionInfo[]? Positions { get; init; }
+
     [JsonPropertyName("capabilities")]
     public CapabilitiesInfo? Capabilities { get; init; }
 
@@ -116,6 +123,10 @@ public record CapabilitiesInfo
 
 public record SettingsInfo
 {
+    // A 1-9 dial value (per Home Assistant's husqvarna_automower
+    // integration), NOT the same scale as WorkArea.CuttingHeight (a
+    // percentage) - see that field's comment. Easy to conflate since both
+    // are just called "cuttingHeight" in the raw API.
     [JsonPropertyName("cuttingHeight")]
     public int? CuttingHeight { get; init; }
 
@@ -183,6 +194,18 @@ public record WorkArea
     [JsonPropertyName("type")]
     public string Type { get; init; } = "";
 
+    // A PERCENTAGE (0-100) of the mower model's adjustable blade-height
+    // range, per Home Assistant's husqvarna_automower integration
+    // (its number entity for this uses native_unit_of_measurement
+    // PERCENTAGE) - not a physical cm/mm measurement, and NOT the same
+    // scale as SettingsInfo.CuttingHeight (the global setting, a 1-9 dial
+    // value on that same integration). Confirmed as the source of a real
+    // discrepancy: the Husqvarna app showed "5.5" (presumably converted to
+    // cm using this mower model's actual min/max blade range) for a work
+    // area this API reported as 87 (%) - that per-model min/max range
+    // isn't exposed anywhere in this API, so the app's cm figure can't be
+    // reproduced from this field; don't attempt to convert it, just label
+    // it as a percentage.
     [JsonPropertyName("cuttingHeight")]
     public int CuttingHeight { get; init; }
 
@@ -241,6 +264,15 @@ public record CalendarTask
 
     [JsonPropertyName("workAreaId")]
     public long? WorkAreaId { get; init; }
+}
+
+public record PositionInfo
+{
+    [JsonPropertyName("latitude")]
+    public double Latitude { get; init; }
+
+    [JsonPropertyName("longitude")]
+    public double Longitude { get; init; }
 }
 
 internal record WorkAreaResponse
