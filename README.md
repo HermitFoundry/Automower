@@ -486,9 +486,9 @@ progress — see `qnap_infrastructure_setup.md` for the QNAP-specific steps,
 and `Caddyfile` for the reverse-proxy config):
 
 ```
-Internet --(Altibox: forward 80/443 only, not the router's "DMZ" feature,
-             which forwards everything unfiltered and would expose the
-             QNAP's own admin UI/SSH too)--> QNAP LAN IP
+Internet --(Altibox: forward 80->8880, 443->8443 only, not the router's
+             "DMZ" feature, which forwards everything unfiltered and would
+             expose the QNAP's own admin UI/SSH too)--> QNAP LAN IP:8880/8443
     --> [Caddy container]  (the only container with published host ports)
             reverse_proxy --> <qnap-lan-ip>:5152 --> [AutomowerWeb container]
 ```
@@ -503,9 +503,14 @@ Internet --(Altibox: forward 80/443 only, not the router's "DMZ" feature,
   the required `AUTOMOWER_HOSTNAME`/`AUTOMOWER_UPSTREAM` env vars and why
   the upstream target is the QNAP's LAN IP, not `localhost` (which inside a
   container means that container, not the host or a sibling container).
-- **Hostname**: a free `myQNAPcloud` DDNS hostname to start (zero cost, zero
-  risk to any other domain) — a `hermit.no` subdomain remains an easy
-  upgrade later if wanted.
+  Published on host ports **8880/8443**, not the standard 80/443 — QTS's own
+  admin interface already holds 443 on this NAS (confirmed via `netstat` on
+  the host before creating the container). Caddy itself doesn't care what
+  port traffic arrives on, so the Altibox forward just maps external 80/443
+  to these instead — Let's Encrypt's HTTP-01 challenge only needs the
+  *external* ports to be 80/443, not the internal ones.
+- **Hostname**: `terjes.myqnapcloud.com` (free `myQNAPcloud` DDNS) — a
+  `hermit.no` subdomain remains an easy upgrade later if wanted.
 - **No authentication, deliberately** — the only data exposed is already
   coarse/low-stakes: activity, battery, mower model/serial, and a
   municipality-level place name (`LocationService` reverse-geocodes to

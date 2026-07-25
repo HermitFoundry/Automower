@@ -373,10 +373,65 @@ $ docker port AutomowerWeb
 static-asset fix (see `startweb.sh`'s own comments) is working correctly in
 Production mode on the real deployment target, not just locally.
 
+### `Caddy` container - created 2026-07-25
+
+Hostname chosen: `terjes.myqnapcloud.com` (free myQNAPcloud DDNS, QNAP ID
+51309252).
+
+**Port conflict discovered before creating it**: `netstat -tlnp` on the
+QNAP host showed `:::443` already `LISTEN`ing - QTS's own admin HTTPS
+interface. Binding Caddy straight to host `443` would have failed outright
+(`bind: address already in use`). Checked `8880`/`8443` were free and used
+those instead - Caddy itself doesn't care what port traffic arrives on
+internally, so this only changes what the eventual Altibox forward needs to
+target (external `80`→`8880`, external `443`→`8443` on the QNAP's LAN IP),
+not anything about how ACME/Let's Encrypt works (that only cares that the
+*external*, internet-facing ports are 80/443, which the router forward
+still provides).
+
+```bash
+DOCKER=/share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker
+$DOCKER volume create caddy-data
+$DOCKER run -d --name AutomowerCaddy \
+    -p 8880:80 -p 8443:443 \
+    -v /share/Repos/Automower/Caddyfile:/etc/caddy/Caddyfile:ro \
+    -v caddy-data:/data \
+    -e AUTOMOWER_HOSTNAME=terjes.myqnapcloud.com \
+    -e AUTOMOWER_UPSTREAM=192.168.10.142:5152 \
+    caddy:latest
+```
+
+Verified after starting:
+- `docker logs AutomowerCaddy` - came up cleanly, no crash-loop. It
+  immediately tried and failed to get a Let's Encrypt cert
+  (`NXDOMAIN looking up A for terjes.myqnapcloud.com`) - expected, since the
+  hostname doesn't resolve publicly yet (see below) - and is just retrying
+  with Caddy's normal backoff (`retrying_in: 60`, `max_duration: 2592000`
+  i.e. 30 days), not failing hard.
+- `curl -s -o /dev/null -w '%{http_code}' http://localhost:8880/ -H 'Host:
+  terjes.myqnapcloud.com'` from the QNAP host → `308` (Caddy's automatic
+  HTTP→HTTPS redirect firing correctly, proving the `Host`-header site
+  match works).
+- HTTPS itself (`curl -sk https://localhost:8443/...`) currently fails the
+  TLS handshake outright (curl error 35) - expected, since there's no valid
+  cert yet and Caddy has nothing to present. Will resolve itself
+  automatically once the cert is issued - no action needed.
+
+**`terjes.myqnapcloud.com` does not resolve yet** (`NXDOMAIN` both from
+Caddy's own ACME attempt and from a plain `nslookup` on the Windows dev
+machine) - the myQNAPcloud DDNS record needs to actually go live (check
+Control Panel → myQNAPcloud → the DDNS/Link status on the NAS itself;
+may just be propagation delay, may need the service explicitly enabled).
+
 ### Still not done
 
-- `Caddy` container - not created yet.
-- Altibox port-forward (80/443 only, not DMZ) - not done yet.
-- DNS/hostname (myQNAPcloud free DDNS, decided earlier) - not chosen/
-  configured yet.
+- **DNS**: `terjes.myqnapcloud.com` needs to actually resolve before
+  anything past this point can work - check myQNAPcloud's status in the
+  QTS Control Panel.
+- **Altibox port-forward**: external `80`→`<qnap-lan-ip>:8880`, external
+  `443`→`<qnap-lan-ip>:8443` - **not** the router's "DMZ" feature. Not done
+  yet.
 - QNAP firewall sanity check once the above is live.
+- Once DNS + the port-forward are both live, Caddy should obtain its
+  Let's Encrypt cert automatically within a minute or two of the next
+  retry - no restart needed, just watch `docker logs -f AutomowerCaddy`.
