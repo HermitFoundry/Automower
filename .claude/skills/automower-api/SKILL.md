@@ -594,6 +594,24 @@ Base URL: `https://api.amc.husqvarna.dev/v1`
 
 ## Gotchas / non-obvious facts
 
+- **No weather/rain, network type (wifi/mobile), signal strength, "smart
+  routine", or product-number field exists anywhere in `GET /mowers/{id}`**
+  - confirmed by inspecting a complete real raw response (`status --all`,
+  2026-07-25) from this account's most full-featured mower (headlights,
+  work areas, stay-out zones capabilities all `true`). If asked to surface
+  any of these in `AutomowerWeb`, don't guess a field name - re-check a
+  real raw dump first; it wasn't there before and there's no reason to
+  assume a later dump would differ. What *is* real and modeled (`Models.cs`,
+  `AutomowerConsole.Core`): `capabilities` (feature flags),
+  `settings.cuttingHeight`/`settings.headlight.mode`, `statistics` (lifetime
+  counters - all `*Time` fields in **seconds**, `totalDriveDistance` in
+  **meters**, per aioautomower's `model_statistics.py` docstrings - verified
+  against real values, e.g. `upTime: 31083938` → 359 days, matching the
+  account's actual mower age), `battery.remainingChargingTime` (seconds),
+  and `planner.override.action` (`NOT_ACTIVE`/`FORCE_PARK`/`FORCE_MOW`). All
+  surfaced in `AutomowerWeb`'s `/mower/{name}` page - status facts at the
+  top, Settings & capabilities and Operation (lifetime) sections at the
+  bottom.
 - **The app trusts the host's system-local clock everywhere, uniformly** —
   `DateTimeOffset.Now` (`TrackingService.cs`'s poll timestamps,
   `ScheduleService.NextCalendarStart`'s day-boundary math) and

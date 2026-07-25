@@ -31,7 +31,7 @@ else if (_cards.Count == 0 && _error is null)
     {
         <div class="mower-card @MowerDisplay.StatusClass(card.Activity, card.Connected)">
             <div class="mower-card-header">
-                <span class="mower-icon">@MowerDisplay.Icon(card.Activity, card.Connected)</span>
+                <span class="mower-icon @MowerDisplay.IconClass(card.Activity)" title="@MowerDisplay.Title(card.Activity, card.Connected)">@MowerDisplay.Icon(card.Activity, card.Connected)</span>
                 <h2>@card.Name</h2>
             </div>
 
@@ -39,7 +39,7 @@ else if (_cards.Count == 0 && _error is null)
                 <dt>Activity</dt>
                 <dd>@MowerDisplay.Label(card.Activity)</dd>
                 <dt>Battery</dt>
-                <dd>@BatteryLabel(card.BatteryPercent)</dd>
+                <dd>@MowerDisplay.BatteryLabel(card.BatteryPercent, card.Activity, card.RemainingChargingSeconds)</dd>
                 <dt>Work area</dt>
                 <dd>@(card.WorkAreaName ?? "—")</dd>
                 <dt>Connected</dt>
@@ -59,7 +59,7 @@ else if (_cards.Count == 0 && _error is null)
                     @foreach (var s in card.TodaySessions)
                     {
                         <li>
-                            <span>@MowerDisplay.Icon(s.Activity, true)</span>
+                            <span class="@MowerDisplay.IconClass(s.Activity)" title="@MowerDisplay.Label(s.Activity)">@MowerDisplay.Icon(s.Activity, true)</span>
                             <span>@s.Start.ToString("HH:mm")–@(s.End?.ToString("HH:mm") ?? "now")</span>
                             <span class="muted">(@SessionDuration(s).FormatDuration())</span>
                             @if (s.WorkAreaName is not null)
@@ -129,16 +129,9 @@ else if (_cards.Count == 0 && _error is null)
                 var detail = await MowerDetailService.GetMowerDetailAsync(mower.Id);
                 var a = detail.Attributes;
 
-                var workAreaName = a.Mower.WorkAreaId is { } workAreaId
-                    ? (a.WorkAreas ?? []).FirstOrDefault(w => w.WorkAreaId == workAreaId)?.Name.Trim()
-                    : null;
-
-                var nextStart = a.Planner.NextStartTimestamp > 0
-                    ? DateTimeOffset.FromUnixTimeMilliseconds(a.Planner.NextStartTimestamp).ToLocalTime().ToString("MMM d, HH:mm")
-                    : "not scheduled";
-
                 var sessions = TrackingService.SummarizeSessions(mower.Name, includeCalendarInfo: false);
-                var today = sessions.Where(s => s.Start.Date == DateTimeOffset.Now.Date).ToList();
+                var today = TrackingService.SplitChargerSessions(
+                    sessions.Where(s => s.Start.Date == DateTimeOffset.Now.Date));
                 var lastWeek = TrackingService.SummarizeDailyActivity(mower.Name).Take(7).ToList();
 
                 cards.Add(new MowerCard(
@@ -146,8 +139,9 @@ else if (_cards.Count == 0 && _error is null)
                     a.Mower.Activity,
                     a.Metadata.Connected,
                     a.Battery.BatteryPercent,
-                    workAreaName,
-                    nextStart,
+                    a.Battery.RemainingChargingTime,
+                    MowerDisplay.WorkAreaName(a),
+                    MowerDisplay.NextStartLabel(a),
                     today,
                     lastWeek));
             }
@@ -167,18 +161,12 @@ else if (_cards.Count == 0 && _error is null)
 
     private static TimeSpan SessionDuration(TrackSession s) => (s.End ?? DateTimeOffset.Now) - s.Start;
 
-    private static string BatteryLabel(int percent) => percent switch
-    {
-        >= 60 => $"🔋 {percent}%",
-        >= 25 => $"🪫 {percent}%",
-        _ => $"🪫 {percent}% (low)",
-    };
-
     private record MowerCard(
         string Name,
         string Activity,
         bool Connected,
         int BatteryPercent,
+        long RemainingChargingSeconds,
         string? WorkAreaName,
         string NextStartLabel,
         List<TrackSession> TodaySessions,

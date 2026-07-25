@@ -266,6 +266,60 @@ public class TrackingService(ScheduleService schedule)
         return sessions;
     }
 
+    // Pure: expands a charger session that has a ChargeCompleteAt into two -
+    // "actually charging" (Start -> ChargeCompleteAt) and "parked, already
+    // full" (ChargeCompleteAt -> End) - instead of leaving it as one row
+    // whose raw Activity/battery range makes it look like nothing happened
+    // for however long the whole stay took. Same split AggregateDailyActivity
+    // already applies to the day *totals*; this applies it to the session
+    // *list* itself, for callers that display individual sessions rather
+    // than day rollups (e.g. AutomowerWeb's session tables) - deliberately
+    // not folded into SummarizeSessions itself, so the CLI's 'sessions'
+    // command (single line per charger stay, by design - see SKILL.md) is
+    // unaffected unless a caller explicitly asks for this.
+    //
+    // Reassigns Activity on both halves ("CHARGING"/"PARKED_IN_CS") rather
+    // than keeping whatever the original raw activity happened to be -
+    // that's the whole point of ChargeCompleteAt: a more reliable signal
+    // for "was it actually charging" than the API's own per-poll activity
+    // label, which is already documented elsewhere as unreliable for this.
+    // NextCalendarStart/NextPlannedStart (only meaningful as of the stay's
+    // arrival) stay on the Charging half and are cleared on the Parked
+    // half, so a caller rendering both doesn't show the same calendar
+    // prediction twice. Sessions with no ChargeCompleteAt, or where it
+    // equals Start/effective-end (arrived already full, or a same-instant
+    // edge case), pass through unchanged - nothing to split. Preserves
+    // input order (newest-first, if that's what was passed in): the Parked
+    // half - the more recent of the two - takes the original session's
+    // position, the Charging half follows immediately after it.
+    //
+    // A still-ongoing session (End is null) uses 'now' only to decide
+    // *whether* to split - same as AggregateDailyActivity treating an
+    // ongoing charger stay's duration as running up to 'now' for the day
+    // totals. The Parked half's own End stays null (still ongoing), not set
+    // to 'now' - a fixed timestamp would go stale the instant this method
+    // returns, misrepresenting a still-growing stay as one that stopped
+    // growing at whatever moment this happened to run.
+    public static List<TrackSession> SplitChargerSessions(IEnumerable<TrackSession> sessions)
+    {
+        var result = new List<TrackSession>();
+        foreach (var s in sessions)
+        {
+            var effectiveEnd = s.End ?? DateTimeOffset.Now;
+            if (IsAtCharger(s.Activity) &&
+                s.ChargeCompleteAt is { } completeAt && completeAt > s.Start && completeAt < effectiveEnd)
+            {
+                result.Add(s with { Start = completeAt, Activity = "PARKED_IN_CS", BatteryStart = 100, NextCalendarStart = null, NextPlannedStart = null });
+                result.Add(s with { End = completeAt, Activity = "CHARGING", BatteryEnd = 100 });
+            }
+            else
+            {
+                result.Add(s);
+            }
+        }
+        return result;
+    }
+
     // Rolls SummarizeSessions' output up by calendar day. Thin wrapper around
     // the pure AggregateDailyActivity below - kept separate so the
     // aggregation itself is unit-testable without needing a real track log

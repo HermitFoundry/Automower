@@ -21,15 +21,33 @@ else if (_detail is not null && _stored is not null)
     var a = _detail.Attributes;
 
     <div class="details-header">
-        <span class="mower-icon">@MowerDisplay.Icon(a.Mower.Activity, a.Metadata.Connected)</span>
+        <span class="mower-icon @MowerDisplay.IconClass(a.Mower.Activity)" title="@MowerDisplay.Title(a.Mower.Activity, a.Metadata.Connected)">@MowerDisplay.Icon(a.Mower.Activity, a.Metadata.Connected)</span>
         <h1>@_stored.Name</h1>
     </div>
-    <p class="muted">@_stored.Model · serial @_stored.SerialNumber</p>
 
     @if (a.Mower.ErrorCode != 0)
     {
         <p class="banner banner-error">⚠️ Error @a.Mower.ErrorCode: @ErrorCodes.Describe(a.Mower.ErrorCode)</p>
     }
+
+    <dl class="mower-facts">
+        <dt>Activity</dt>
+        <dd>@MowerDisplay.Label(a.Mower.Activity)</dd>
+        <dt>Battery</dt>
+        <dd>@MowerDisplay.BatteryLabel(a.Battery.BatteryPercent, a.Mower.Activity, a.Battery.RemainingChargingTime)</dd>
+        <dt>Work area</dt>
+        <dd>@(MowerDisplay.WorkAreaName(a) ?? "—")</dd>
+        <dt>Connected</dt>
+        <dd>@(a.Metadata.Connected ? "✅ yes" : "❌ no")</dd>
+        <dt>Next start</dt>
+        <dd>@MowerDisplay.NextStartLabel(a)</dd>
+        <dt>Override</dt>
+        <dd>@MowerDisplay.OverrideLabel(a.Planner.Override?.Action)</dd>
+        <dt>Model</dt>
+        <dd>@_stored.Model</dd>
+        <dt>Serial number</dt>
+        <dd>@_stored.SerialNumber</dd>
+    </dl>
 
     <section>
         <h2>🗺️ Work areas</h2>
@@ -134,7 +152,7 @@ else if (_detail is not null && _stored is not null)
                     @foreach (var s in _sessions)
                     {
                         <tr>
-                            <td>@MowerDisplay.Icon(s.Activity, true)</td>
+                            <td class="@MowerDisplay.IconClass(s.Activity)" title="@MowerDisplay.Label(s.Activity)">@MowerDisplay.Icon(s.Activity, true)</td>
                             <td>@s.Start.ToString("yyyy-MM-dd")</td>
                             <td>@MowerDisplay.Label(s.Activity)</td>
                             <td>@s.Start.ToString("HH:mm")–@(s.End?.ToString("HH:mm") ?? "ongoing")</td>
@@ -164,6 +182,64 @@ else if (_detail is not null && _stored is not null)
             </ul>
         }
     </section>
+
+    <section>
+        <h2>⚙️ Settings &amp; capabilities</h2>
+        <dl class="mower-facts">
+            <dt>Cutting height</dt>
+            <dd>@(a.Settings?.CuttingHeight?.ToString() ?? "—")</dd>
+            <dt>Headlight mode</dt>
+            <dd>@MowerDisplay.HeadlightModeLabel(a.Settings?.Headlight?.Mode)</dd>
+        </dl>
+        @if (a.Capabilities is null)
+        {
+            <p class="muted small">No capability info reported.</p>
+        }
+        else
+        {
+            <ul class="capability-list">
+                <li>@(a.Capabilities.Headlights ? "✅" : "❌") Headlights</li>
+                <li>@(a.Capabilities.WorkAreas ? "✅" : "❌") Work areas</li>
+                <li>@(a.Capabilities.Position ? "✅" : "❌") GPS position</li>
+                <li>@(a.Capabilities.StayOutZones ? "✅" : "❌") Stay-out zones</li>
+                <li>@(a.Capabilities.CanConfirmError ? "✅" : "❌") Can confirm errors via app</li>
+            </ul>
+        }
+    </section>
+
+    <section>
+        <h2>📈 Operation (lifetime)</h2>
+        @if (a.Statistics is null)
+        {
+            <p class="muted small">No statistics reported.</p>
+        }
+        else
+        {
+            var st = a.Statistics;
+            <dl class="mower-facts">
+                <dt>Total running time</dt>
+                <dd>@MowerDisplay.LifetimeDuration(st.TotalRunningTime)</dd>
+                <dt>Total cutting time</dt>
+                <dd>@MowerDisplay.LifetimeDuration(st.TotalCuttingTime)</dd>
+                <dt>Total charging time</dt>
+                <dd>@MowerDisplay.LifetimeDuration(st.TotalChargingTime)</dd>
+                <dt>Total searching time</dt>
+                <dd>@MowerDisplay.LifetimeDuration(st.TotalSearchingTime)</dd>
+                <dt>Blade usage time</dt>
+                <dd>@MowerDisplay.LifetimeDuration(st.CuttingBladeUsageTime)</dd>
+                <dt>Down time</dt>
+                <dd>@MowerDisplay.LifetimeDuration(st.DownTime)</dd>
+                <dt>Connected uptime</dt>
+                <dd>@MowerDisplay.LifetimeDuration(st.UpTime)</dd>
+                <dt>Total drive distance</dt>
+                <dd>@MowerDisplay.Distance(st.TotalDriveDistance)</dd>
+                <dt>Charging cycles</dt>
+                <dd>@st.NumberOfChargingCycles</dd>
+                <dt>Collisions</dt>
+                <dd>@st.NumberOfCollisions</dd>
+            </dl>
+        }
+    </section>
 }
 
 @code {
@@ -189,7 +265,7 @@ else if (_detail is not null && _stored is not null)
             }
 
             _detail = await MowerDetailService.GetMowerDetailAsync(_stored.Id);
-            _sessions = TrackingService.SummarizeSessions(_stored.Name, includeCalendarInfo: false);
+            _sessions = TrackingService.SplitChargerSessions(TrackingService.SummarizeSessions(_stored.Name, includeCalendarInfo: false));
             _days = TrackingService.SummarizeDailyActivity(_stored.Name);
             _messages = (await MowerDetailService.GetMessagesAsync(_stored.Id))
                 .OrderByDescending(m => m.Time)

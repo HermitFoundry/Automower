@@ -81,6 +81,95 @@ public record MowerAttributes
 
     [JsonPropertyName("calendar")]
     public CalendarInfo? Calendar { get; init; }
+
+    [JsonPropertyName("capabilities")]
+    public CapabilitiesInfo? Capabilities { get; init; }
+
+    [JsonPropertyName("settings")]
+    public SettingsInfo? Settings { get; init; }
+
+    [JsonPropertyName("statistics")]
+    public StatisticsInfo? Statistics { get; init; }
+}
+
+// Feature flags for this specific mower model - not settings a user
+// changes, just what the hardware/firmware supports. Confirmed present on
+// GET /mowers/{id} via a real 'status --all' dump (2026-07-25); optional
+// here in case an older mower model's response omits it.
+public record CapabilitiesInfo
+{
+    [JsonPropertyName("headlights")]
+    public bool Headlights { get; init; }
+
+    [JsonPropertyName("workAreas")]
+    public bool WorkAreas { get; init; }
+
+    [JsonPropertyName("position")]
+    public bool Position { get; init; }
+
+    [JsonPropertyName("canConfirmError")]
+    public bool CanConfirmError { get; init; }
+
+    [JsonPropertyName("stayOutZones")]
+    public bool StayOutZones { get; init; }
+}
+
+public record SettingsInfo
+{
+    [JsonPropertyName("cuttingHeight")]
+    public int? CuttingHeight { get; init; }
+
+    [JsonPropertyName("headlight")]
+    public HeadlightInfo? Headlight { get; init; }
+}
+
+public record HeadlightInfo
+{
+    // ALWAYS_ON / ALWAYS_OFF / EVENING_ONLY / EVENING_AND_NIGHT, per
+    // aioautomower's model_settings.py - not re-validated as a closed enum
+    // here, displayed as-is (same "don't over-model an external API"
+    // approach already used for Mower.Activity/State/etc.).
+    [JsonPropertyName("mode")]
+    public string Mode { get; init; } = "";
+}
+
+// Lifetime usage counters - confirmed via aioautomower's model_statistics.py
+// docstrings: all *Time fields are seconds, TotalDriveDistance is meters,
+// the two "number of" fields are unitless counts. Not the same as anything
+// already modeled (battery/mower/metadata are current-state; this is
+// cumulative since the mower was first set up, or since counters were last
+// reset).
+public record StatisticsInfo
+{
+    [JsonPropertyName("cuttingBladeUsageTime")]
+    public long CuttingBladeUsageTime { get; init; }
+
+    [JsonPropertyName("downTime")]
+    public long DownTime { get; init; }
+
+    [JsonPropertyName("numberOfChargingCycles")]
+    public long NumberOfChargingCycles { get; init; }
+
+    [JsonPropertyName("numberOfCollisions")]
+    public long NumberOfCollisions { get; init; }
+
+    [JsonPropertyName("totalChargingTime")]
+    public long TotalChargingTime { get; init; }
+
+    [JsonPropertyName("totalCuttingTime")]
+    public long TotalCuttingTime { get; init; }
+
+    [JsonPropertyName("totalDriveDistance")]
+    public long TotalDriveDistance { get; init; }
+
+    [JsonPropertyName("totalRunningTime")]
+    public long TotalRunningTime { get; init; }
+
+    [JsonPropertyName("totalSearchingTime")]
+    public long TotalSearchingTime { get; init; }
+
+    [JsonPropertyName("upTime")]
+    public long UpTime { get; init; }
 }
 
 public record WorkArea
@@ -209,6 +298,13 @@ public record BatteryInfo
 {
     [JsonPropertyName("batteryPercent")]
     public int BatteryPercent { get; init; }
+
+    // Seconds, per aioautomower's model_battery.py (deserializes via
+    // timedelta(seconds=x)); 0 means "not currently charging/no estimate",
+    // not "already full" - only meaningful while Mower.Activity is
+    // CHARGING.
+    [JsonPropertyName("remainingChargingTime")]
+    public long RemainingChargingTime { get; init; }
 }
 
 public record MowerActivityState
@@ -247,6 +343,18 @@ public record PlannerInfo
 
     [JsonPropertyName("restrictedReason")]
     public string RestrictedReason { get; init; } = "";
+
+    [JsonPropertyName("override")]
+    public PlannerOverride? Override { get; init; }
+}
+
+public record PlannerOverride
+{
+    // NOT_ACTIVE / FORCE_PARK / FORCE_MOW, per aioautomower's
+    // model_planner.py Actions enum - whether the app's schedule is
+    // currently being manually overridden.
+    [JsonPropertyName("action")]
+    public string Action { get; init; } = "";
 }
 
 public record MetadataInfo
