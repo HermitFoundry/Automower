@@ -41,9 +41,11 @@ adaptive polling/logging mode (`track`).
 
    The config file lives in `.config/config.json`, and `list`/`use`/`track`
    generate state in `.data/` — both are resolved relative to the repo root
-   (found by walking up from the built executable to the nearest `.csproj`),
+   (found by walking up from the built executable to the nearest `.slnx`),
    not the `bin/` build output folder, so `dotnet clean` never touches them.
    Both directories are gitignored — keep it that way (see **Security note**).
+   `AutomowerWeb` (see **Web dashboard**) reads the same two directories, so
+   it needs to run somewhere that can see them too.
 
 ## Running
 
@@ -61,16 +63,14 @@ am.cmd <command> [args]        # Windows
 ./am.sh <command> [args]       # Linux/macOS
 ```
 
-On Linux/macOS, `am.sh` needs the executable bit set once per checkout — a
-fresh `git clone`/`git pull` won't carry it automatically on every system.
-If you get "Permission denied" trying to run `./am.sh`, this is why:
-
-```
-chmod +x am.sh
-```
-
-After that, `./am.sh <command>` works directly. If you'd rather not chmod
-anything, `bash am.sh <command>` works too without it.
+On Linux/macOS, `am.sh`/`startall.sh`/`stopall.sh`/`bootstrap.sh` need the
+executable bit, which git now tracks directly (`git update-index --chmod=+x`
+was applied and committed) — a fresh `git clone` on Linux gets it for free.
+If an *existing* checkout still loses it after a pull (some git configs,
+e.g. `core.fileMode=false`, won't restore local bits from the index), run
+`./fix-permissions.sh` to reset all of this repo's `*.sh` scripts at once,
+or `chmod +x am.sh` for just the one. If you'd rather not chmod anything,
+`bash am.sh <command>` works too without it.
 
 **Use the shortcuts, not `dotnet run`, for `track`.** `dotnet run` is a
 build-and-launch wrapper, and it does not reliably forward POSIX signals
@@ -104,7 +104,7 @@ selection.
 | `schedule [mower]` | Show the calendar, refresh `.data/schedule.json`, and show the live next calendar/planned start |
 | `track [seconds] [mower]` | Adaptive-interval polling with logging to a per-mower `.data/track-<mower>.jsonl` (see below) |
 | `sessions [--calendar] [mower]` | Summarize a mower's track log into one line per mowing/charging/etc. session (see below) |
-| `daily [mower]` | One line per calendar day: total Mowing time per work area, then total Charging time (see below) |
+| `daily [mower]` | One line per calendar day: total Mowing time per work area, then Charging and Parked time (see below) |
 | `help` | Show usage |
 
 ### Examples
@@ -213,20 +213,29 @@ is needed — see **`calendar` vs `planner`** below for what each one means):
 
 `daily [mower]` rolls `sessions`' output up by day: total **Mowing** time per
 work area that day (repeated on the line for each additional area worked,
-summed together if the same area was mowed more than once that day), then a
-single combined **Charging** total last — charging isn't tied to a work
-area, so it's outside that list rather than part of it:
+summed together if the same area was mowed more than once that day), then
+**Charging** and, if any, **Parked** last — neither is tied to a work area,
+so both are outside that list rather than part of it:
 
 ```
 Daily activity for AM405X (newest first, from .data/track-AM405X.jsonl):
-  2026-07-21  Mowing 50m [Front Lawn]   Mowing 30m [Back Yard]   Charging 21h15m
+  2026-07-21  Mowing 50m [Front Lawn]   Mowing 30m [Back Yard]   Charging 3h20m   Parked 17h55m
   2026-07-20  Mowing 1h00m [Front Lawn]   Mowing 45m [Back Yard]   Charging 21h15m
 ```
 
-`Charging` combines `CHARGING` and `PARKED_IN_CS` into one "time spent at
-the charger" total. Days with only charging (or only mowing) simply omit the
-other half of the line. Other activities (`Going home`, `Leaving`,
-`Stopped`, ...) aren't represented — only the two totals that were asked for.
+`Charging`+`Parked` together are "time spent at the charger" (`CHARGING` and
+`PARKED_IN_CS` combined — the activity label alone is an unreliable signal
+for whether real charging is happening, not split further on that axis).
+What *does* split them: the poll where `track` observes battery reach 100%
+(see `` `track`: adaptive polling and logging `` above) marks the boundary —
+`Charging` is arrival → that point, `Parked` is that point → the mower
+leaving again (charged, but no longer actively charging). A stay that never
+reaches 100% before leaving (or is still ongoing) counts entirely as
+`Charging`, with no `Parked` portion — "still charging" as far as the data
+can tell; `Parked` is omitted from the line entirely when zero, same as
+`Charging`/`Mowing` being omitted when a day has none. Other activities
+(`Going home`, `Leaving`, `Stopped`, ...) aren't represented — only the
+totals that were asked for.
 
 **A session counts entirely toward the day it *started*** — same
 simplification `sessions` already makes for its own single date column, not
@@ -345,42 +354,219 @@ placeholder template to copy from if you ever need to recreate it by hand;
 
 ## Project layout
 
-The console app lives in its own `AutomowerConsole/` subfolder, with a
-sibling `AutomowerConsole.Tests/` (NUnit) referencing it via
-`InternalsVisibleTo`, and `am.cmd`, `am.sh`, and `automower.slnx` at the
-repo root. Run the tests with `dotnet test`.
+Four projects under `automower.slnx`: a shared library, the CLI, its tests,
+and a web dashboard — the CLI and the web app are two independent
+presentation layers over the same domain/service code, not one depending on
+the other.
 
-- `AutomowerConsole/Program.cs` — CLI entry point, argument parsing, and
-  result printing
-- `AutomowerConsole/MowerService.cs` — mower listing, caching, and
-  name/id/index resolution
-- `AutomowerConsole/MowerDetailService.cs` — fetching a specific mower's live
-  status, messages, and work area detail
-- `AutomowerConsole/ScheduleService.cs` — calendar/schedule calculations and
-  the schedule cache
-- `AutomowerConsole/TrackingService.cs` — the `track` polling loop and
-  `sessions` log summarization
-- `AutomowerConsole/AutomowerConnect.cs` — facade over `HusqvarnaClient` that
-  owns the auth lifecycle (auto-authenticate, retry once on token expiry),
-  reached via a shared `AutomowerConnect.Instance` so the services above
-  never touch auth directly
-- `AutomowerConsole/HusqvarnaClient.cs` — low-level OAuth2 + Automower
-  Connect API HTTP calls
-- `AutomowerConsole/Models.cs` — JSON response models and config/cache
-  record types
-- `AutomowerConsole/Storage.cs` — reads/writes `.config/config.json` and
-  `.data/*.json(l)`, and finds the repo root (nearest `.slnx`, not `.csproj`
-  — there's only ever one, and it stays in the true repo root even as more
-  projects are added) that they're anchored to
-- `AutomowerConsole/ErrorCodes.cs` — full Automower error code → description
-  table
-- `AutomowerConsole.Tests/` — NUnit test project; `AutomowerConsole.csproj`
-  grants it access to internal types via `<InternalsVisibleTo>`
-- `automower.slnx` — solution file referencing both projects
+- **`AutomowerConsole.Core/`** — the shared domain/service layer. Everything
+  in here is what used to live directly in `AutomowerConsole/` before the
+  CLI and `AutomowerWeb` both needed it; `public` is a real API boundary
+  here now, not the `internal` + `InternalsVisibleTo` pattern still used
+  for test-only access:
+  - `MowerService.cs` — mower listing, caching, and name/id/index resolution
+  - `MowerDetailService.cs` — fetching a specific mower's live status,
+    messages, and work area detail
+  - `ScheduleService.cs` — calendar/schedule calculations and the schedule
+    cache
+  - `TrackingService.cs` — the `track` polling loop and `sessions`/`daily`
+    log summarization
+  - `ErrorCodes.cs`, `Extensions.cs` (`FormatDuration`, `IsNighttime`) — small
+    public helpers both consumers use for display
+  - `AutomowerConnect.cs` / `HusqvarnaClient.cs` — auth + raw HTTP calls,
+    deliberately kept `internal` to Core — nothing outside Core, in either
+    the CLI or the web app, should reach the API directly; go through the
+    services above instead
+  - `Storage.cs` — reads/writes `.config/config.json` and `.data/*.json(l)`,
+    and finds the repo root (nearest `.slnx`, not `.csproj` — there's only
+    ever one, and it stays in the true repo root regardless of how many
+    projects sit under it) that they're anchored to. `public`, unlike the
+    other internals above, since the CLI's own config/state commands
+    (`config`, `use`, `current`) call it directly with no service layer of
+    their own
+  - `Models.cs` — JSON response models and config/cache record types (the
+    pure wire-DTOs the API's JSON unwraps into stay `internal`; the actual
+    domain types services return are `public`)
+- **`AutomowerConsole/`** — the CLI. Just `Program.cs` now: argument
+  parsing and result printing on top of `AutomowerConsole.Core`'s services
+- **`AutomowerConsole.Tests/`** — NUnit tests, referencing
+  `AutomowerConsole.Core` directly (it's what they've always actually
+  tested — `TrackingService`, etc.)
+- **`AutomowerWeb/`** — the Blazor web dashboard, see **Web dashboard**
+  below
 - `am.cmd` / `am.sh` — shortcuts that build `AutomowerConsole.csproj` once
   and then run the compiled `.dll` directly (not `dotnet run` — see above)
 - `startall.sh` / `stopall.sh` — start/stop one tmux `track` session per
   mower (see **Running `track` unattended** above)
+- `startweb.sh` / `stopweb.sh` — start/stop `AutomowerWeb` in a detached
+  tmux session (see **Web dashboard** below)
+- `bootstrap.sh` / `fix-permissions.sh` — one-time container provisioning
+  and the `chmod +x` fallback (see **Prerequisites**/**Running** above)
+- `automower.slnx` — the solution file referencing all four projects
 
-For API implementation notes (auth flow, endpoint quirks, timestamp units,
+Run the tests with `dotnet test`.
+
+## Web dashboard (`AutomowerWeb`)
+
+A read-only Blazor Server app: a `/` dashboard (live status per mower —
+activity, battery, work area, connected, next start, location, weather —
+plus that mower's sessions from *today only* and a 7-day rollup) and a
+`/mower/{name}` details page per mower (the same status facts up top, plus
+full session history, daily rollup, work areas, stay-out zones, schedule,
+recent messages, settings/capabilities, and lifetime operation statistics
+at the bottom). No login yet, and deliberately no mower control anywhere in
+it — an unauthenticated public control surface for a physical outdoor
+device is a different risk class than an unauthenticated read-only
+dashboard, and hasn't been asked for.
+
+**Location and weather** are derived from each mower's own latest GPS
+position (`positions[0]` in the API response - absent for a mower with no
+GPS fix, in which case those two rows are just omitted). Two free, keyless
+external services, called server-side: OpenStreetMap's **Nominatim** for
+reverse geocoding (place name cached indefinitely per mower - a charging
+station doesn't move meter-to-meter between polls) and **Open-Meteo** for
+current weather (cached 20 minutes, since it actually changes). This means
+`AutomowerWeb` needs outbound internet access to those two hosts, in
+addition to Husqvarna's own API - true for local dev, and something to keep
+in mind once it's running somewhere with more restricted egress.
+
+Run it locally the same way as any ASP.NET project, from the repo root so
+it can see `.config`/`.data`:
+
+```
+dotnet run --project AutomowerWeb
+```
+
+then open the URL it prints (default `http://localhost:5152`).
+
+**On the QNAP container, run it via `startweb.sh`/`stopweb.sh`** instead of
+a plain `dotnet run` you'd have to babysit in a terminal — same pattern as
+`startall.sh`/`stopall.sh` for `track`: a detached tmux session that
+survives an SSH disconnect, building once and running the compiled `.dll`
+directly (not `dotnet run`, for the same graceful-Ctrl+C-forwarding reason
+as `am.sh`). Bound to all interfaces (`0.0.0.0:5152` by default,
+`./startweb.sh <port>` to override) so it's reachable from outside the
+container, not just `localhost`:
+
+```
+./startweb.sh          # builds, starts in tmux session "automowerweb"
+./stopweb.sh            # graceful stop (Ctrl+C, falls back to force-kill)
+```
+
+**If you rebuild/pull new code, `startweb.sh` won't pick it up on its
+own** — a tmux session that's already running keeps whatever was loaded in
+memory when it started, same as any other long-running process here (see
+`track`'s equivalent gotcha above). Run `./stopweb.sh` then `./startweb.sh`
+to actually restart it on the new build; `./startweb.sh` alone just says
+"already running" and does nothing if a session already exists under that
+name.
+
+**No auto-refresh timer on the dashboard, by design.** It's a 4th
+independent process authenticating with the same Husqvarna app key/secret
+as the 3 `track` sessions (see `AutomowerConsole`'s `startall.sh` notes on
+Husqvarna's `simultaneous.logins` rejection) — a background poll loop would
+add another recurring source of auth traffic for a dashboard nobody's
+continuously watching. It loads once per page visit and on an explicit
+"🔄 Refresh" click instead.
+
+**Not yet deployed anywhere** — running it in its own container (separate
+from the one running `track`), exposing it via router port-forwarding, and
+adding auth are all separate, later steps, not part of what's built here.
+
+## Connecting to the QNAP container over SSH
+
+The account's long-running `track` sessions (and, for now, ad hoc testing of
+`AutomowerWeb`) live in a Debian container on a QNAP NAS. Getting a shell
+there is two hops, easy to conflate:
+
+1. **The QNAP host itself** — plain SSH, lands in the NAS's own OS, not the
+   container:
+
+   ```
+   ssh <user>@<qnap-ip>
+   ```
+
+2. **Into the container, at the repo directory** — from that host shell:
+
+   ```
+   docker exec -it -w /repos/Automower <container-id> bash
+   ```
+
+   Combine both into one command from your own machine:
+
+   ```
+   ssh <user>@<qnap-ip> -t "docker exec -it -w /repos/Automower <container-id> bash"
+   ```
+
+   `docker` isn't on `PATH` for a non-interactive shell like that `-t`
+   invocation (only for an interactive login shell) — if you get
+   `docker: command not found`, use the full path instead of a bare
+   `docker`, e.g. `/share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker`
+   (varies by QNAP volume label - `which docker` from an interactive host
+   login finds it).
+
+   Worth saving as an SSH config alias so it's just `ssh automower`. **This
+   file lives on your own machine — wherever you run `ssh` *from* — not on
+   the QNAP or inside the container**, since it configures your local SSH
+   client's behavior, not anything remote:
+
+   ```
+   # ~/.ssh/config  (on your own machine, e.g. C:\Users\<you>\.ssh\config on Windows)
+   Host automower
+       HostName <qnap-ip>
+       User <user>
+       RemoteCommand /share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker exec -it -w /repos/Automower <container-id> bash
+       RequestTTY yes
+   ```
+
+   Full `docker` path again here for the same reason as above — `RemoteCommand`
+   runs the same way as `ssh host -t "command"`, so a bare `docker` won't
+   resolve.
+
+The container's ID is stable across stop/start, but **changes if the
+container is ever recreated** — update any saved alias if that happens.
+
+### Testing `AutomowerWeb` from your own machine via an SSH tunnel
+
+Useful when you want to check something in a browser without exposing any
+port on the QNAP/router — e.g. verifying a change works on the container
+before it's worth setting up real LAN/internet-facing access, or any time
+you don't want to touch the running container's network config just to look
+at something. Tunnel straight to the container's internal IP through the
+QNAP host as the relay (find the container's IP in Container Station → Edit
+Container → Network):
+
+```
+ssh -L <local-port>:<container-ip>:5152 <user>@<qnap-ip>
+```
+
+e.g., with this account's actual values (container IP from Container Station
+→ Edit Container → Network, `15152` as the local port since `5152` was
+already taken by a locally-running copy of the app):
+
+```
+ssh -L 15152:10.0.3.2:5152 terje@192.168.10.142
+```
+
+then browse to `http://127.0.0.1:<local-port>` (use the literal
+`127.0.0.1`, not `localhost` — Windows OpenSSH's `-L` sometimes only binds
+the IPv4 loopback, while `localhost` can resolve to `::1` first and find
+nothing listening). Pick a local port that isn't already in use by a copy
+of the app running directly on your own machine.
+
+**The tunnel only exists while that SSH session stays connected.** Closing
+the terminal (or it disconnecting for any reason) silently kills the
+forward — the browser will just fail to load with no obvious explanation,
+since nothing about the failure mentions the tunnel at all. If the
+dashboard was working and then suddenly isn't, check whether that terminal
+is still open before troubleshooting anything else.
+
+If this fails with `channel N: open failed: administratively prohibited`,
+the QNAP's sshd has `AllowTcpForwarding` disabled — see
+`qnap_infrastructure_setup.md` for the fix (and why the obvious fix, editing
+`/etc/ssh/sshd_config`, doesn't work on this QNAP).
+
+For deeper QNAP/Container Station operational notes (timezone, port
+mapping, this SSH forwarding issue) see `qnap_infrastructure_setup.md`. For
+API implementation notes (auth flow, endpoint quirks, timestamp units,
 external references) see `.claude/skills/automower-api/SKILL.md`.

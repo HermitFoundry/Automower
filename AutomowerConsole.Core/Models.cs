@@ -1,8 +1,8 @@
 using System.Text.Json.Serialization;
 
-namespace AutomowerConsole;
+namespace AutomowerConsole.Core;
 
-record Config
+public record Config
 {
     public string AppKey { get; init; } = "";
     public string AppSecret { get; init; } = "";
@@ -19,7 +19,11 @@ record Config
     public int NightEndHour { get; init; } = 8;
 }
 
-record TokenResponse
+// Wire DTOs below (TokenResponse through WorkAreaResourceData) stay internal
+// to Core - only HusqvarnaClient/AutomowerConnect ever touch them directly;
+// callers outside Core only ever see the unwrapped domain types further down.
+
+internal record TokenResponse
 {
     [JsonPropertyName("access_token")]
     public string AccessToken { get; init; } = "";
@@ -34,13 +38,13 @@ record TokenResponse
     public string Provider { get; init; } = "";
 }
 
-record MowersResponse
+internal record MowersResponse
 {
     [JsonPropertyName("data")]
     public MowerData[] Data { get; init; } = [];
 }
 
-record MowerData
+public record MowerData
 {
     [JsonPropertyName("id")]
     public string Id { get; init; } = "";
@@ -52,7 +56,7 @@ record MowerData
     public MowerAttributes Attributes { get; init; } = new();
 }
 
-record MowerAttributes
+public record MowerAttributes
 {
     [JsonPropertyName("system")]
     public MowerSystem System { get; init; } = new();
@@ -77,9 +81,109 @@ record MowerAttributes
 
     [JsonPropertyName("calendar")]
     public CalendarInfo? Calendar { get; init; }
+
+    // GPS breadcrumb trail, newest first, capped at 50 entries - see
+    // SKILL.md's Gotchas for the "not work-area boundary data" caveat.
+    // Absent/empty when capabilities.position is false, or occasionally
+    // even when true (e.g. a mower with a weak/no recent GPS fix).
+    [JsonPropertyName("positions")]
+    public PositionInfo[]? Positions { get; init; }
+
+    [JsonPropertyName("capabilities")]
+    public CapabilitiesInfo? Capabilities { get; init; }
+
+    [JsonPropertyName("settings")]
+    public SettingsInfo? Settings { get; init; }
+
+    [JsonPropertyName("statistics")]
+    public StatisticsInfo? Statistics { get; init; }
 }
 
-record WorkArea
+// Feature flags for this specific mower model - not settings a user
+// changes, just what the hardware/firmware supports. Confirmed present on
+// GET /mowers/{id} via a real 'status --all' dump (2026-07-25); optional
+// here in case an older mower model's response omits it.
+public record CapabilitiesInfo
+{
+    [JsonPropertyName("headlights")]
+    public bool Headlights { get; init; }
+
+    [JsonPropertyName("workAreas")]
+    public bool WorkAreas { get; init; }
+
+    [JsonPropertyName("position")]
+    public bool Position { get; init; }
+
+    [JsonPropertyName("canConfirmError")]
+    public bool CanConfirmError { get; init; }
+
+    [JsonPropertyName("stayOutZones")]
+    public bool StayOutZones { get; init; }
+}
+
+public record SettingsInfo
+{
+    // A 1-9 dial value (per Home Assistant's husqvarna_automower
+    // integration), NOT the same scale as WorkArea.CuttingHeight (a
+    // percentage) - see that field's comment. Easy to conflate since both
+    // are just called "cuttingHeight" in the raw API.
+    [JsonPropertyName("cuttingHeight")]
+    public int? CuttingHeight { get; init; }
+
+    [JsonPropertyName("headlight")]
+    public HeadlightInfo? Headlight { get; init; }
+}
+
+public record HeadlightInfo
+{
+    // ALWAYS_ON / ALWAYS_OFF / EVENING_ONLY / EVENING_AND_NIGHT, per
+    // aioautomower's model_settings.py - not re-validated as a closed enum
+    // here, displayed as-is (same "don't over-model an external API"
+    // approach already used for Mower.Activity/State/etc.).
+    [JsonPropertyName("mode")]
+    public string Mode { get; init; } = "";
+}
+
+// Lifetime usage counters - confirmed via aioautomower's model_statistics.py
+// docstrings: all *Time fields are seconds, TotalDriveDistance is meters,
+// the two "number of" fields are unitless counts. Not the same as anything
+// already modeled (battery/mower/metadata are current-state; this is
+// cumulative since the mower was first set up, or since counters were last
+// reset).
+public record StatisticsInfo
+{
+    [JsonPropertyName("cuttingBladeUsageTime")]
+    public long CuttingBladeUsageTime { get; init; }
+
+    [JsonPropertyName("downTime")]
+    public long DownTime { get; init; }
+
+    [JsonPropertyName("numberOfChargingCycles")]
+    public long NumberOfChargingCycles { get; init; }
+
+    [JsonPropertyName("numberOfCollisions")]
+    public long NumberOfCollisions { get; init; }
+
+    [JsonPropertyName("totalChargingTime")]
+    public long TotalChargingTime { get; init; }
+
+    [JsonPropertyName("totalCuttingTime")]
+    public long TotalCuttingTime { get; init; }
+
+    [JsonPropertyName("totalDriveDistance")]
+    public long TotalDriveDistance { get; init; }
+
+    [JsonPropertyName("totalRunningTime")]
+    public long TotalRunningTime { get; init; }
+
+    [JsonPropertyName("totalSearchingTime")]
+    public long TotalSearchingTime { get; init; }
+
+    [JsonPropertyName("upTime")]
+    public long UpTime { get; init; }
+}
+
+public record WorkArea
 {
     [JsonPropertyName("workAreaId")]
     public long WorkAreaId { get; init; }
@@ -90,6 +194,18 @@ record WorkArea
     [JsonPropertyName("type")]
     public string Type { get; init; } = "";
 
+    // A PERCENTAGE (0-100) of the mower model's adjustable blade-height
+    // range, per Home Assistant's husqvarna_automower integration
+    // (its number entity for this uses native_unit_of_measurement
+    // PERCENTAGE) - not a physical cm/mm measurement, and NOT the same
+    // scale as SettingsInfo.CuttingHeight (the global setting, a 1-9 dial
+    // value on that same integration). Confirmed as the source of a real
+    // discrepancy: the Husqvarna app showed "5.5" (presumably converted to
+    // cm using this mower model's actual min/max blade range) for a work
+    // area this API reported as 87 (%) - that per-model min/max range
+    // isn't exposed anywhere in this API, so the app's cm figure can't be
+    // reproduced from this field; don't attempt to convert it, just label
+    // it as a percentage.
     [JsonPropertyName("cuttingHeight")]
     public int CuttingHeight { get; init; }
 
@@ -109,13 +225,13 @@ record WorkArea
     public CalendarInfo? Calendar { get; init; }
 }
 
-record CalendarInfo
+public record CalendarInfo
 {
     [JsonPropertyName("tasks")]
     public CalendarTask[] Tasks { get; init; } = [];
 }
 
-record CalendarTask
+public record CalendarTask
 {
     // Minutes from midnight
     [JsonPropertyName("start")]
@@ -150,13 +266,22 @@ record CalendarTask
     public long? WorkAreaId { get; init; }
 }
 
-record WorkAreaResponse
+public record PositionInfo
+{
+    [JsonPropertyName("latitude")]
+    public double Latitude { get; init; }
+
+    [JsonPropertyName("longitude")]
+    public double Longitude { get; init; }
+}
+
+internal record WorkAreaResponse
 {
     [JsonPropertyName("data")]
     public WorkAreaResourceData Data { get; init; } = new();
 }
 
-record WorkAreaResourceData
+internal record WorkAreaResourceData
 {
     [JsonPropertyName("id")]
     public string Id { get; init; } = "";
@@ -168,7 +293,7 @@ record WorkAreaResourceData
     public WorkArea Attributes { get; init; } = new();
 }
 
-record StayOutZonesInfo
+public record StayOutZonesInfo
 {
     [JsonPropertyName("dirty")]
     public bool Dirty { get; init; }
@@ -177,7 +302,7 @@ record StayOutZonesInfo
     public StayOutZone[] Zones { get; init; } = [];
 }
 
-record StayOutZone
+public record StayOutZone
 {
     [JsonPropertyName("id")]
     public string Id { get; init; } = "";
@@ -189,7 +314,7 @@ record StayOutZone
     public bool Enabled { get; init; }
 }
 
-record MowerSystem
+public record MowerSystem
 {
     [JsonPropertyName("name")]
     public string Name { get; init; } = "";
@@ -201,13 +326,20 @@ record MowerSystem
     public long SerialNumber { get; init; }
 }
 
-record BatteryInfo
+public record BatteryInfo
 {
     [JsonPropertyName("batteryPercent")]
     public int BatteryPercent { get; init; }
+
+    // Seconds, per aioautomower's model_battery.py (deserializes via
+    // timedelta(seconds=x)); 0 means "not currently charging/no estimate",
+    // not "already full" - only meaningful while Mower.Activity is
+    // CHARGING.
+    [JsonPropertyName("remainingChargingTime")]
+    public long RemainingChargingTime { get; init; }
 }
 
-record MowerActivityState
+public record MowerActivityState
 {
     [JsonPropertyName("mode")]
     public string Mode { get; init; } = "";
@@ -235,7 +367,7 @@ record MowerActivityState
     public int ErrorCode { get; init; }
 }
 
-record PlannerInfo
+public record PlannerInfo
 {
     // Unix epoch milliseconds; 0 means no scheduled start
     [JsonPropertyName("nextStartTimestamp")]
@@ -243,9 +375,21 @@ record PlannerInfo
 
     [JsonPropertyName("restrictedReason")]
     public string RestrictedReason { get; init; } = "";
+
+    [JsonPropertyName("override")]
+    public PlannerOverride? Override { get; init; }
 }
 
-record MetadataInfo
+public record PlannerOverride
+{
+    // NOT_ACTIVE / FORCE_PARK / FORCE_MOW, per aioautomower's
+    // model_planner.py Actions enum - whether the app's schedule is
+    // currently being manually overridden.
+    [JsonPropertyName("action")]
+    public string Action { get; init; } = "";
+}
+
+public record MetadataInfo
 {
     [JsonPropertyName("connected")]
     public bool Connected { get; init; }
@@ -255,19 +399,19 @@ record MetadataInfo
     public long StatusTimestamp { get; init; }
 }
 
-record MowerResponse
+internal record MowerResponse
 {
     [JsonPropertyName("data")]
     public MowerData Data { get; init; } = new();
 }
 
-record MessagesResponse
+internal record MessagesResponse
 {
     [JsonPropertyName("data")]
     public MessagesData Data { get; init; } = new();
 }
 
-record MessagesData
+internal record MessagesData
 {
     [JsonPropertyName("id")]
     public string Id { get; init; } = "";
@@ -279,13 +423,13 @@ record MessagesData
     public MessagesAttributes Attributes { get; init; } = new();
 }
 
-record MessagesAttributes
+internal record MessagesAttributes
 {
     [JsonPropertyName("messages")]
     public MessageItem[] Messages { get; init; } = [];
 }
 
-record MessageItem
+public record MessageItem
 {
     // Unix epoch seconds
     [JsonPropertyName("time")]
@@ -305,10 +449,10 @@ record MessageItem
 }
 
 // Persisted to mowers.json
-record StoredMower(string Id, string Name, string Model, long SerialNumber);
+public record StoredMower(string Id, string Name, string Model, long SerialNumber);
 
 // Persisted to state.json
-record ActiveState(string ActiveMowerId, string ActiveMowerName);
+public record ActiveState(string ActiveMowerId, string ActiveMowerName);
 
 // Persisted to schedule.json, keyed by mower id
-record MowerSchedule(string MowerName, DateTimeOffset FetchedAt, CalendarTask[] Tasks);
+public record MowerSchedule(string MowerName, DateTimeOffset FetchedAt, CalendarTask[] Tasks);

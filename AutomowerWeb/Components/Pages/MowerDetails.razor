@@ -1,0 +1,325 @@
+@page "/mower/{Name}"
+@inject MowerService MowerService
+@inject MowerDetailService MowerDetailService
+@inject ScheduleService ScheduleService
+@inject TrackingService TrackingService
+@inject LocationService LocationService
+@inject WeatherService WeatherService
+
+<PageTitle>@Name - Automower</PageTitle>
+
+<a class="back-link" href="/">← Dashboard</a>
+
+@if (_loading)
+{
+    <p class="muted">Loading…</p>
+}
+else if (_error is not null)
+{
+    <p class="banner banner-error">⚠️ @_error</p>
+}
+else if (_detail is not null && _stored is not null)
+{
+    var a = _detail.Attributes;
+
+    <div class="details-header">
+        <span class="mower-icon @MowerDisplay.IconClass(a.Mower.Activity)" title="@MowerDisplay.Title(a.Mower.Activity, a.Metadata.Connected)">@MowerDisplay.Icon(a.Mower.Activity, a.Metadata.Connected)</span>
+        <h1>@_stored.Name</h1>
+    </div>
+
+    @if (a.Mower.ErrorCode != 0)
+    {
+        <p class="banner banner-error">⚠️ Error @a.Mower.ErrorCode: @ErrorCodes.Describe(a.Mower.ErrorCode)</p>
+    }
+
+    <dl class="mower-facts">
+        <dt>Activity</dt>
+        <dd>@MowerDisplay.Label(a.Mower.Activity)</dd>
+        <dt>Battery</dt>
+        <dd>@MowerDisplay.BatteryLabel(a.Battery.BatteryPercent, a.Mower.Activity, a.Battery.RemainingChargingTime)</dd>
+        <dt>Work area</dt>
+        <dd>@(MowerDisplay.WorkAreaName(a) ?? "—")</dd>
+        <dt>Connected</dt>
+        <dd>@(a.Metadata.Connected ? "✅ yes" : "❌ no")</dd>
+        <dt>Next start</dt>
+        <dd>@MowerDisplay.NextStartLabel(a)</dd>
+        <dt>Override</dt>
+        <dd>@MowerDisplay.OverrideLabel(a.Planner.Override?.Action)</dd>
+        <dt>Model</dt>
+        <dd>@_stored.Model</dd>
+        <dt>Serial number</dt>
+        <dd>@_stored.SerialNumber</dd>
+        @if (_location is not null)
+        {
+            <dt>Location</dt>
+            <dd>📍 @_location</dd>
+        }
+        @if (_weather is not null)
+        {
+            <dt>Weather</dt>
+            <dd>@MowerDisplay.WeatherIcon(_weather) @_weather.TemperatureCelsius.ToString("F0")°C, @MowerDisplay.WeatherLabel(_weather.WeatherCode)</dd>
+        }
+    </dl>
+
+    <section>
+        <h2>🗺️ Work areas</h2>
+        @if ((a.WorkAreas ?? []).Length == 0)
+        {
+            <p class="muted small">No work areas configured.</p>
+        }
+        else
+        {
+            <table>
+                <thead><tr><th>Name</th><th>Cutting height</th><th>Enabled</th></tr></thead>
+                <tbody>
+                    @foreach (var wa in a.WorkAreas!)
+                    {
+                        <tr>
+                            <td>@wa.Name.Trim()</td>
+                            <td>@CuttingHeightEstimator.Label(wa.CuttingHeight, a.System.Model)</td>
+                            <td>@(wa.Enabled ? "✅" : "❌")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <p class="muted small">
+                cm figures are an estimate (min/max blade height isn't exposed by
+                the API) - the app's own display may differ slightly.
+            </p>
+        }
+    </section>
+
+    <section>
+        <h2>🚫 Stay-out zones</h2>
+        @if (a.StayOutZones is null || a.StayOutZones.Zones.Length == 0)
+        {
+            <p class="muted small">No stay-out zones configured.</p>
+        }
+        else
+        {
+            <ul>
+                @foreach (var z in a.StayOutZones.Zones)
+                {
+                    <li>@z.Name @(z.Enabled ? "" : "(disabled)")</li>
+                }
+            </ul>
+        }
+    </section>
+
+    <section>
+        <h2>📅 Schedule</h2>
+        @{
+            var tasks = a.Calendar?.Tasks ?? [];
+            var workAreaNames = (a.WorkAreas ?? []).ToDictionary(w => w.WorkAreaId, w => w.Name.Trim());
+        }
+        @if (tasks.Length == 0)
+        {
+            <p class="muted small">No calendar tasks configured.</p>
+        }
+        else
+        {
+            <ul>
+                @foreach (var t in tasks)
+                {
+                    <li>@FormatTask(t, workAreaNames)</li>
+                }
+            </ul>
+            var next = ScheduleService.NextCalendarStart(tasks, DateTimeOffset.Now);
+            <p class="muted small">Next calendar start: @(next?.ToString("yyyy-MM-dd HH:mm") ?? "none")</p>
+        }
+    </section>
+
+    <section>
+        <h2>📊 Daily rollup</h2>
+        @if (_days.Count == 0)
+        {
+            <p class="muted small">No track history yet.</p>
+        }
+        else
+        {
+            <table>
+                <thead><tr><th>Date</th><th>Mowing</th><th>Charging</th><th>Parked</th></tr></thead>
+                <tbody>
+                    @foreach (var day in _days)
+                    {
+                        <tr>
+                            <td>@day.Date.ToString("yyyy-MM-dd")</td>
+                            <td>@MowerDisplay.MowingCell(day.Mowing)</td>
+                            <td>@MowerDisplay.DurationCell(day.Charging)</td>
+                            <td>@MowerDisplay.DurationCell(day.Parked)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+
+    <section>
+        <h2>🕒 Session history</h2>
+        @if (_sessions.Count == 0)
+        {
+            <p class="muted small">No track history yet.</p>
+        }
+        else
+        {
+            <table>
+                <thead><tr><th></th><th>Date</th><th>Activity</th><th>Time</th><th>Duration</th><th>Battery</th><th>Area</th></tr></thead>
+                <tbody>
+                    @foreach (var s in _sessions)
+                    {
+                        <tr>
+                            <td class="@MowerDisplay.IconClass(s.Activity)" title="@MowerDisplay.Label(s.Activity)">@MowerDisplay.Icon(s.Activity, true)</td>
+                            <td>@s.Start.ToString("yyyy-MM-dd")</td>
+                            <td>@MowerDisplay.Label(s.Activity)</td>
+                            <td>@s.Start.ToString("HH:mm")–@(s.End?.ToString("HH:mm") ?? "ongoing")</td>
+                            <td>@SessionDuration(s).FormatDuration()</td>
+                            <td>@s.BatteryStart%→@s.BatteryEnd%</td>
+                            <td>@(s.WorkAreaName ?? "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+
+    <section>
+        <h2>✉️ Recent messages</h2>
+        @if (_messages.Count == 0)
+        {
+            <p class="muted small">No messages.</p>
+        }
+        else
+        {
+            <ul>
+                @foreach (var m in _messages)
+                {
+                    <li>@DateTimeOffset.FromUnixTimeSeconds(m.Time).ToLocalTime().ToString("yyyy-MM-dd HH:mm") — @m.Severity: @ErrorCodes.Describe(m.Code)</li>
+                }
+            </ul>
+        }
+    </section>
+
+    <section>
+        <h2>⚙️ Settings &amp; capabilities</h2>
+        <dl class="mower-facts">
+            <dt>Cutting height (dial)</dt>
+            <dd>@(a.Settings?.CuttingHeight?.ToString() ?? "—") <span class="muted small">of 9</span></dd>
+            <dt>Headlight mode</dt>
+            <dd>@MowerDisplay.HeadlightModeLabel(a.Settings?.Headlight?.Mode)</dd>
+        </dl>
+        @if (a.Capabilities is null)
+        {
+            <p class="muted small">No capability info reported.</p>
+        }
+        else
+        {
+            <ul class="capability-list">
+                <li>@(a.Capabilities.Headlights ? "✅" : "❌") Headlights</li>
+                <li>@(a.Capabilities.WorkAreas ? "✅" : "❌") Work areas</li>
+                <li>@(a.Capabilities.Position ? "✅" : "❌") GPS position</li>
+                <li>@(a.Capabilities.StayOutZones ? "✅" : "❌") Stay-out zones</li>
+                <li>@(a.Capabilities.CanConfirmError ? "✅" : "❌") Can confirm errors via app</li>
+            </ul>
+        }
+    </section>
+
+    <section>
+        <h2>📈 Operation (lifetime)</h2>
+        @if (a.Statistics is null)
+        {
+            <p class="muted small">No statistics reported.</p>
+        }
+        else
+        {
+            var st = a.Statistics;
+            <dl class="mower-facts">
+                <dt>Total running time</dt>
+                <dd>@MowerDisplay.LifetimeDuration(st.TotalRunningTime)</dd>
+                <dt>Total cutting time</dt>
+                <dd>@MowerDisplay.LifetimeDuration(st.TotalCuttingTime)</dd>
+                <dt>Total charging time</dt>
+                <dd>@MowerDisplay.LifetimeDuration(st.TotalChargingTime)</dd>
+                <dt>Total searching time</dt>
+                <dd>@MowerDisplay.LifetimeDuration(st.TotalSearchingTime)</dd>
+                <dt>Blade usage time</dt>
+                <dd>@MowerDisplay.LifetimeDuration(st.CuttingBladeUsageTime)</dd>
+                <dt>Down time</dt>
+                <dd>@MowerDisplay.LifetimeDuration(st.DownTime)</dd>
+                <dt>Connected uptime</dt>
+                <dd>@MowerDisplay.LifetimeDuration(st.UpTime)</dd>
+                <dt>Total drive distance</dt>
+                <dd>@MowerDisplay.Distance(st.TotalDriveDistance)</dd>
+                <dt>Charging cycles</dt>
+                <dd>@st.NumberOfChargingCycles</dd>
+                <dt>Collisions</dt>
+                <dd>@st.NumberOfCollisions</dd>
+            </dl>
+        }
+    </section>
+}
+
+@code {
+    [Parameter] public string Name { get; set; } = "";
+
+    private bool _loading = true;
+    private string? _error;
+    private StoredMower? _stored;
+    private MowerData? _detail;
+    private List<TrackSession> _sessions = [];
+    private List<DailyActivity> _days = [];
+    private List<MessageItem> _messages = [];
+    private string? _location;
+    private WeatherInfo? _weather;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _stored = await MowerService.ResolveExplicitMowerAsync(Name);
+            if (_stored is null)
+            {
+                _error = $"No mower found matching '{Name}'.";
+                return;
+            }
+
+            _detail = await MowerDetailService.GetMowerDetailAsync(_stored.Id);
+            _sessions = TrackingService.SplitChargerSessions(TrackingService.SummarizeSessions(_stored.Name, includeCalendarInfo: false));
+            _days = TrackingService.SummarizeDailyActivity(_stored.Name);
+            _messages = (await MowerDetailService.GetMessagesAsync(_stored.Id))
+                .OrderByDescending(m => m.Time)
+                .Take(20)
+                .ToList();
+
+            var position = (_detail.Attributes.Positions ?? []).FirstOrDefault();
+            if (position is not null)
+            {
+                _location = await LocationService.GetPlaceNameAsync(position.Latitude, position.Longitude);
+                _weather = await WeatherService.GetCurrentWeatherAsync(position.Latitude, position.Longitude);
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Couldn't load {Name}: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static TimeSpan SessionDuration(TrackSession s) => (s.End ?? DateTimeOffset.Now) - s.Start;
+
+    private static string FormatTask(CalendarTask t, Dictionary<long, string> workAreaNames)
+    {
+        var days = new[]
+        {
+            (t.Monday, "Mon"), (t.Tuesday, "Tue"), (t.Wednesday, "Wed"), (t.Thursday, "Thu"),
+            (t.Friday, "Fri"), (t.Saturday, "Sat"), (t.Sunday, "Sun"),
+        };
+        var dayLabel = string.Join(",", days.Where(d => d.Item1).Select(d => d.Item2));
+        var start = TimeSpan.FromMinutes(t.Start);
+        var end = TimeSpan.FromMinutes(t.Start + t.Duration);
+        var area = t.WorkAreaId is { } id && workAreaNames.TryGetValue(id, out var name) ? $" [{name}]" : "";
+        return $"{dayLabel}  {start:hh\\:mm}-{end:hh\\:mm}{area}";
+    }
+}

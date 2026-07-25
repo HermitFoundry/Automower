@@ -6,10 +6,21 @@ version: 1.0.0
 
 # Automower Connect API notes
 
-Working knowledge for `C:\repos\automower`, a C# console app (`AutomowerConsole`,
-net10.0) that talks to the Husqvarna Automower Connect API. Run via `am.cmd
-<command> [args]` on Windows or `./am.sh <command> [args]` on Linux/macOS, or
-`dotnet run -- <command>` directly for quick one-offs. Also deployed to a
+Working knowledge for `C:\repos\automower`, a 4-project net10.0 solution
+(`automower.slnx`) talking to the Husqvarna Automower Connect API:
+`AutomowerConsole.Core` (shared domain/service layer - `MowerService`,
+`MowerDetailService`, `ScheduleService`, `TrackingService`, `AutomowerConnect`,
+`Storage`, `Models`, etc., all `public` except `AutomowerConnect`/
+`HusqvarnaClient`/wire-DTOs which stay `internal` to Core - nothing outside
+Core should reach the API directly), `AutomowerConsole` (the CLI, just
+`Program.cs` on top of Core), `AutomowerConsole.Tests` (NUnit, tests Core
+directly), and `AutomowerWeb` (a read-only Blazor Server dashboard, also on
+top of Core - see README's "Web dashboard" section for what it shows and
+how to run it; `dotnet run --project AutomowerWeb`). The CLI and the web app
+are two independent presentation layers over the same Core, neither depends
+on the other. Run the CLI via `am.cmd <command> [args]` on Windows or
+`./am.sh <command> [args]` on Linux/macOS, or `dotnet run --project
+AutomowerConsole -- <command>` directly for quick one-offs. Also deployed to a
 Debian container on the user's QNAP TS-673A NAS for long-running `track`
 sessions - `startall.sh`/`stopall.sh` (repo root) automate running one tmux
 `track` session per mower there (currently 3: AM405X, AM430X NERA, AM308V
@@ -17,6 +28,15 @@ Nede) rather than doing the `tmux new -s ...`/Ctrl+C-per-session dance by
 hand for each. `startall.sh` discovers the mower list from `.data/mowers.json`
 (fetching it first via `am.sh list` if missing) rather than hardcoding the 3
 current mower names, so it stays correct if a mower is added/renamed/removed.
+
+**Getting a shell on that container**: see README's "Connecting to the QNAP
+container over SSH" section for the two-hop pattern (host, then `docker exec`
+into the container) and the `ssh automower` alias shortcut - and
+`qnap_infrastructure_setup.md` for the deeper QNAP-specific gotchas behind
+it (`docker` not on `PATH` for non-interactive/`RemoteCommand` invocations,
+Container Station's port-mapping limitations, the `AllowTcpForwarding`
+saga). Both are host/infra knowledge, not application code, so they're kept
+out of this skill doc's own body.
 
 Session naming and the mower query passed to `track` both use just the
 **model prefix** of each mower's name - `${name%% *}` in bash, e.g. "AM430X"
@@ -129,11 +149,15 @@ a real 3-day `sessions` history from AM430X NERA (2026-07-21 through
 JSONL polls, since `sessions` output is what the user actually had on hand.
 One test specifically locks in the overnight-session/midnight-attribution
 behavior (`OvernightChargingSessionCountsEntirelyTowardItsStartDay`) using
-a real cross-midnight session from that history. `AutomowerConsole.csproj`
-has `<InternalsVisibleTo Include="AutomowerConsole.Tests" />` so tests can
-reach internal types (`TrackingService`, `TrackSession`, etc. are all
-unmarked/default `internal`) without making anything public just for
-testability - this is now actually exercised, not just wired up unused.
+a real cross-midnight session from that history. Originally reached
+`TrackingService`/`TrackSession` (then `internal` in `AutomowerConsole`) via
+`<InternalsVisibleTo Include="AutomowerConsole.Tests" />` - superseded by
+the `AutomowerConsole.Core` extraction (see top of this doc), where
+`TrackingService` and friends are genuinely `public` now that a second real
+consumer (`AutomowerWeb`) needs them too; the tests project just references
+`AutomowerConsole.Core` directly, no `InternalsVisibleTo` needed for this
+particular class anymore (Core still grants it to
+`AutomowerConsole.Tests` for the handful of types that stayed `internal`).
 Packages were bumped to latest via `dotnet outdated -u` right after
 scaffolding (NUnit 4.3.2→4.6.1, NUnit3TestAdapter 5.0.0→6.2.0,
 Microsoft.NET.Test.Sdk 17.14.0→18.8.1, coverlet.collector 6.0.4→10.0.1,
@@ -468,17 +492,22 @@ Three buckets per day: Mowing, summed per work area
 (`DailyAccumulator.AddMowing` finds-or-creates by `WorkAreaName` including
 `null`, so an unresolved-name area still gets its own bucket rather than
 merging into whichever other unnamed area happened first) via a private
-nested `DailyAccumulator` class; and Charging/Full, split from what used to
-be one combined `TrackingService.IsAtCharger` total (`CHARGING` +
+nested `DailyAccumulator` class; and Charging/Parked, split from what used
+to be one combined `TrackingService.IsAtCharger` total (`CHARGING` +
 `PARKED_IN_CS` together - still no finer split on *that* axis, the
 activity label itself remains an unreliable signal). The split instead uses
 `TrackSession.ChargeCompleteAt`: Charging is session-start → that point (or
 the whole session if `ChargeCompleteAt` is null - "still charging" as far
 as the data shows, same treatment for a genuinely-ongoing session and for
-an old log line that predates this field), Full is that point → session
-end. `Full` is omitted from a day's `daily` line entirely when zero (e.g.
-every charger session that day is still `Charging`-only), same convention
-already used for Charging. Sessions in neither bucket (`GOING_HOME`,
+an old log line that predates this field), Parked is that point → session
+end (charged but not actively charging anymore). `Parked` is omitted from a
+day's `daily` line entirely when zero (e.g. every charger session that day
+is still `Charging`-only), same convention already used for Charging.
+Named `Parked` rather than the earlier `Full` (renamed after it read oddly
+as a table column header in `AutomowerWeb` - see **Web dashboard** in
+`README.md`) - same field, same meaning, just a clearer name for the same
+"charged but sitting there, not mowing" concept. Sessions in neither bucket
+(`GOING_HOME`,
 `LEAVING`, `STOPPED_IN_GARDEN`, ...) are silently dropped from the rollup -
 not an oversight, just outside what was requested. Days that end up with no
 bucket populated (e.g. the only session that day was a 5-minute `Leaving`)
@@ -565,6 +594,51 @@ Base URL: `https://api.amc.husqvarna.dev/v1`
 
 ## Gotchas / non-obvious facts
 
+- **No weather/rain, network type (wifi/mobile), signal strength, "smart
+  routine", or product-number field exists anywhere in `GET /mowers/{id}`**
+  - confirmed by inspecting a complete real raw response (`status --all`,
+  2026-07-25) from this account's most full-featured mower (headlights,
+  work areas, stay-out zones capabilities all `true`). If asked to surface
+  any of these in `AutomowerWeb`, don't guess a field name - re-check a
+  real raw dump first; it wasn't there before and there's no reason to
+  assume a later dump would differ. What *is* real and modeled (`Models.cs`,
+  `AutomowerConsole.Core`): `capabilities` (feature flags),
+  `settings.cuttingHeight`/`settings.headlight.mode`, `statistics` (lifetime
+  counters - all `*Time` fields in **seconds**, `totalDriveDistance` in
+  **meters**, per aioautomower's `model_statistics.py` docstrings - verified
+  against real values, e.g. `upTime: 31083938` → 359 days, matching the
+  account's actual mower age), `battery.remainingChargingTime` (seconds),
+  and `planner.override.action` (`NOT_ACTIVE`/`FORCE_PARK`/`FORCE_MOW`). All
+  surfaced in `AutomowerWeb`'s `/mower/{name}` page - status facts at the
+  top, Settings & capabilities and Operation (lifetime) sections at the
+  bottom.
+- **Two different, easily-conflated "cuttingHeight" fields, on two different
+  scales** - `settings.cuttingHeight` (global, `SettingsInfo` in
+  `Models.cs`) is a **1-9 dial value**; `workAreas[].cuttingHeight`
+  (per-area, `WorkArea.CuttingHeight`) is a **percentage (0-100)** of the
+  mower model's adjustable blade-height range - confirmed against Home
+  Assistant's `husqvarna_automower` integration (`number.py`'s
+  `native_unit_of_measurement: PERCENTAGE` for the work-area one, plain
+  1-9 min/max for the global one). The Husqvarna app shows the per-area one
+  converted to cm - that per-model min/max range isn't exposed anywhere in
+  this API, so it can't be derived from the API response alone.
+  `AutomowerWeb/CuttingHeightEstimator.cs` estimates it anyway, using a
+  linear-interpolation formula and per-model min/max table from an
+  **unverified, third-party explanation** (no official Husqvarna citation):
+  `cm = min + percentage/100 * (max - min)`. Confirmed to match the real
+  app's own displayed value for this account's AM430X ("oversiden": API
+  `87` → estimate `5.5 cm`, matching the app exactly) - one confirmed data
+  point, not a guarantee for other models/values. The min/max/electronic
+  table lives in `AutomowerWeb/cutting-height-ranges.json` (tracked in git,
+  copied to the build output - **not** `.config/`, which is blanket-
+  gitignored for secrets and wrong for non-secret reference data like
+  this), specifically so a new mower model can be added by editing that
+  file, no code change/rebuild needed if edited directly in the output
+  directory. A model with **manual** (knob) height adjustment - e.g. the
+  308V - can't report its real height at all; the API just returns a
+  meaningless placeholder (observed: always `0`) instead, so
+  `"electronic": false` in that file skips the conversion entirely rather
+  than showing a plausible-but-wrong number.
 - **The app trusts the host's system-local clock everywhere, uniformly** —
   `DateTimeOffset.Now` (`TrackingService.cs`'s poll timestamps,
   `ScheduleService.NextCalendarStart`'s day-boundary math) and

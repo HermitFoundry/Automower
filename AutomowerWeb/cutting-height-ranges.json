@@ -1,0 +1,5 @@
+{
+  "308V": { "minCm": 2.0, "maxCm": 5.0, "electronic": false },
+  "405X": { "minCm": 2.0, "maxCm": 5.0, "electronic": true },
+  "430X": { "minCm": 2.0, "maxCm": 6.0, "electronic": true }
+}

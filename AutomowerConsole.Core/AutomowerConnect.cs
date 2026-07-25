@@ -1,4 +1,4 @@
-namespace AutomowerConsole;
+namespace AutomowerConsole.Core;
 
 // Facade over HusqvarnaClient that owns the auth lifecycle: callers never
 // call AuthenticateAsync() themselves or think about token expiry - every

@@ -1,4 +1,4 @@
-using AutomowerConsole;
+using AutomowerConsole.Core;
 
 namespace AutomowerConsole.Tests;
 
@@ -166,15 +166,15 @@ public class TrackingServiceAggregateDailyActivityTests
     }
 
     [Test]
-    public void ChargingSplitsIntoChargingAndFullWhenChargeCompleteAtIsKnown()
+    public void ChargingSplitsIntoChargingAndParkedWhenChargeCompleteAtIsKnown()
     {
         DateTimeOffset T(int hour, int minute) => new(2026, 7, 24, hour, minute, 0, TimeSpan.FromHours(2));
 
         // Reached 100% partway through - Charging should cover only up to
-        // that point, Full the remainder until it left.
+        // that point, Parked the remainder until it left.
         var midSession = new TrackSession(T(7, 0), T(9, 0), "CHARGING", 40, 100, null, null, null, T(8, 0));
 
-        // Arrived already at 100% - the whole stay is Full, none of it
+        // Arrived already at 100% - the whole stay is Parked, none of it
         // Charging (nothing left to charge).
         var arrivedFullSession = new TrackSession(T(10, 0), T(10, 30), "PARKED_IN_CS", 100, 100, null, null, null, T(10, 0));
 
@@ -187,7 +187,85 @@ public class TrackingServiceAggregateDailyActivityTests
 
         Assert.That(day.Charging, Is.EqualTo(TimeSpan.FromHours(1) + TimeSpan.FromMinutes(20)),
             "expected 1h (mid-session, 07:00-08:00) + 20m (never-full session) of real Charging time");
-        Assert.That(day.Full, Is.EqualTo(TimeSpan.FromHours(1) + TimeSpan.FromMinutes(30)),
-            "expected 1h (mid-session, 08:00-09:00) + 30m (arrived-full session) of Full time");
+        Assert.That(day.Parked, Is.EqualTo(TimeSpan.FromHours(1) + TimeSpan.FromMinutes(30)),
+            "expected 1h (mid-session, 08:00-09:00) + 30m (arrived-full session) of Parked time");
+    }
+
+    [Test]
+    public void SplitChargerSessionsExpandsAChargerSessionWithChargeCompleteAtIntoTwo()
+    {
+        DateTimeOffset T(int hour, int minute) => new(2026, 7, 24, hour, minute, 0, TimeSpan.FromHours(2));
+
+        var mowing = new TrackSession(T(6, 0), T(7, 0), "MOWING", 90, 60, "oversiden", null, null, null);
+        var chargerSession = new TrackSession(T(20, 0), T(23, 30), "PARKED_IN_CS", 53, 100, null, null, null, T(22, 0));
+
+        var result = TrackingService.SplitChargerSessions([mowing, chargerSession]);
+
+        Assert.That(result, Has.Count.EqualTo(3));
+        Assert.That(result[0], Is.EqualTo(mowing), "non-charger session should pass through unchanged");
+
+        // Parked half (the more recent of the two) takes the original
+        // session's position, Charging follows right after - preserves
+        // newest-first order the same way the original single row did.
+        var parked = result[1];
+        Assert.That(parked.Activity, Is.EqualTo("PARKED_IN_CS"));
+        Assert.That(parked.Start, Is.EqualTo(T(22, 0)));
+        Assert.That(parked.End, Is.EqualTo(chargerSession.End));
+        Assert.That(parked.BatteryStart, Is.EqualTo(100));
+        Assert.That(parked.BatteryEnd, Is.EqualTo(chargerSession.BatteryEnd));
+
+        var charging = result[2];
+        Assert.That(charging.Activity, Is.EqualTo("CHARGING"));
+        Assert.That(charging.Start, Is.EqualTo(chargerSession.Start));
+        Assert.That(charging.End, Is.EqualTo(T(22, 0)));
+        Assert.That(charging.BatteryStart, Is.EqualTo(53));
+        Assert.That(charging.BatteryEnd, Is.EqualTo(100));
+    }
+
+    [Test]
+    public void SplitChargerSessionsLeavesSessionsWithoutAChargeCompleteAtUnchanged()
+    {
+        DateTimeOffset T(int hour, int minute) => new(2026, 7, 24, hour, minute, 0, TimeSpan.FromHours(2));
+        var stillCharging = new TrackSession(T(9, 0), T(11, 0), "CHARGING", 40, 90, null, null, null, null);
+
+        var result = TrackingService.SplitChargerSessions([stillCharging]);
+
+        Assert.That(result, Is.EqualTo(new[] { stillCharging }));
+    }
+
+    [Test]
+    public void SplitChargerSessionsLeavesAnArrivedAlreadyFullSessionUnchanged()
+    {
+        // ChargeCompleteAt == Start - nothing to split, it was already full
+        // on arrival.
+        DateTimeOffset T(int hour, int minute) => new(2026, 7, 24, hour, minute, 0, TimeSpan.FromHours(2));
+        var arrivedFull = new TrackSession(T(10, 0), T(10, 30), "PARKED_IN_CS", 100, 100, null, null, null, T(10, 0));
+
+        var result = TrackingService.SplitChargerSessions([arrivedFull]);
+
+        Assert.That(result, Is.EqualTo(new[] { arrivedFull }));
+    }
+
+    [Test]
+    public void SplitChargerSessionsSplitsAStillOngoingSessionUsingNowAsTheImplicitEnd()
+    {
+        // A real currently-ongoing stay (End is null) that reached 100% a
+        // while ago should still split - the Parked half just keeps growing
+        // (End null) rather than being frozen at whatever moment this ran.
+        var completedAt = DateTimeOffset.Now.AddHours(-2);
+        var ongoing = new TrackSession(DateTimeOffset.Now.AddHours(-5), null, "PARKED_IN_CS", 60, 100, null, null, null, completedAt);
+
+        var result = TrackingService.SplitChargerSessions([ongoing]);
+
+        Assert.That(result, Has.Count.EqualTo(2));
+        var parked = result[0];
+        Assert.That(parked.Activity, Is.EqualTo("PARKED_IN_CS"));
+        Assert.That(parked.Start, Is.EqualTo(completedAt));
+        Assert.That(parked.End, Is.Null, "the still-ongoing half must stay open-ended, not frozen at 'now'");
+
+        var charging = result[1];
+        Assert.That(charging.Activity, Is.EqualTo("CHARGING"));
+        Assert.That(charging.Start, Is.EqualTo(ongoing.Start));
+        Assert.That(charging.End, Is.EqualTo(completedAt));
     }
 }

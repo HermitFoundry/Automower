@@ -1,7 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
 
-namespace AutomowerConsole;
+namespace AutomowerConsole.Core;
 
 internal class HusqvarnaClient(HttpClient http, string appKey, string appSecret)
 {

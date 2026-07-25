@@ -1,10 +1,10 @@
-namespace AutomowerConsole;
+namespace AutomowerConsole.Core;
 
 // Calendar/schedule calculations and the schedule.json cache. Pure
 // calculation plus Storage-backed caching - no AutomowerConnect dependency.
 // DateTimeOffset.IsNighttime(...) (Extensions.cs) is a separate, pre-existing
 // piece of schedule-timing logic; this class calls it rather than duplicating it.
-internal class ScheduleService
+public class ScheduleService
 {
     public bool DayFlag(CalendarTask t, DayOfWeek day) => day switch
     {
