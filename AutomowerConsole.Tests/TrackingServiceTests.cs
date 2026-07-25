@@ -85,12 +85,11 @@ public class TrackingServiceAggregateDailyActivityTests
     {
         var days = TrackingService.AggregateDailyActivity(RealSessionHistory());
 
-        Assert.That(days.Select(d => d.Date), Is.EqualTo(new[]
-        {
+        Assert.That(days.Select(d => d.Date), Is.EqualTo([
             new DateOnly(2026, 7, 23),
             new DateOnly(2026, 7, 22),
-            new DateOnly(2026, 7, 21),
-        }));
+            new DateOnly(2026, 7, 21)
+        ]));
     }
 
     [Test]
@@ -135,8 +134,11 @@ public class TrackingServiceAggregateDailyActivityTests
         Assert.That(days, Has.Count.EqualTo(3));
         foreach (var day in days)
         {
-            Assert.That(day.Charging, Is.GreaterThan(TimeSpan.Zero), $"expected some charging time on {day.Date}");
-            Assert.That(day.Mowing.Select(m => m.WorkAreaName), Is.All.EqualTo("oversiden").Or.Empty);
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(day.Charging, Is.GreaterThan(TimeSpan.Zero), $"expected some charging time on {day.Date}");
+                Assert.That(day.Mowing.Select(m => m.WorkAreaName), Is.All.EqualTo("oversiden").Or.Empty);
+            }
         }
 
         // 2026-07-21 was charger-only (the mower didn't mow that day in this history).
@@ -185,10 +187,13 @@ public class TrackingServiceAggregateDailyActivityTests
         var days = TrackingService.AggregateDailyActivity([midSession, arrivedFullSession, neverFullSession]);
         var day = days.Single();
 
-        Assert.That(day.Charging, Is.EqualTo(TimeSpan.FromHours(1) + TimeSpan.FromMinutes(20)),
-            "expected 1h (mid-session, 07:00-08:00) + 20m (never-full session) of real Charging time");
-        Assert.That(day.Parked, Is.EqualTo(TimeSpan.FromHours(1) + TimeSpan.FromMinutes(30)),
-            "expected 1h (mid-session, 08:00-09:00) + 30m (arrived-full session) of Parked time");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(day.Charging, Is.EqualTo(TimeSpan.FromHours(1) + TimeSpan.FromMinutes(20)),
+                    "expected 1h (mid-session, 07:00-08:00) + 20m (never-full session) of real Charging time");
+            Assert.That(day.Parked, Is.EqualTo(TimeSpan.FromHours(1) + TimeSpan.FromMinutes(30)),
+                "expected 1h (mid-session, 08:00-09:00) + 30m (arrived-full session) of Parked time");
+        }
     }
 
     [Test]
@@ -208,18 +213,24 @@ public class TrackingServiceAggregateDailyActivityTests
         // session's position, Charging follows right after - preserves
         // newest-first order the same way the original single row did.
         var parked = result[1];
-        Assert.That(parked.Activity, Is.EqualTo("PARKED_IN_CS"));
-        Assert.That(parked.Start, Is.EqualTo(T(22, 0)));
-        Assert.That(parked.End, Is.EqualTo(chargerSession.End));
-        Assert.That(parked.BatteryStart, Is.EqualTo(100));
-        Assert.That(parked.BatteryEnd, Is.EqualTo(chargerSession.BatteryEnd));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(parked.Activity, Is.EqualTo("PARKED_IN_CS"));
+            Assert.That(parked.Start, Is.EqualTo(T(22, 0)));
+            Assert.That(parked.End, Is.EqualTo(chargerSession.End));
+            Assert.That(parked.BatteryStart, Is.EqualTo(100));
+            Assert.That(parked.BatteryEnd, Is.EqualTo(chargerSession.BatteryEnd));
+        }
 
         var charging = result[2];
-        Assert.That(charging.Activity, Is.EqualTo("CHARGING"));
-        Assert.That(charging.Start, Is.EqualTo(chargerSession.Start));
-        Assert.That(charging.End, Is.EqualTo(T(22, 0)));
-        Assert.That(charging.BatteryStart, Is.EqualTo(53));
-        Assert.That(charging.BatteryEnd, Is.EqualTo(100));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(charging.Activity, Is.EqualTo("CHARGING"));
+            Assert.That(charging.Start, Is.EqualTo(chargerSession.Start));
+            Assert.That(charging.End, Is.EqualTo(T(22, 0)));
+            Assert.That(charging.BatteryStart, Is.EqualTo(53));
+            Assert.That(charging.BatteryEnd, Is.EqualTo(100));
+        }
     }
 
     [Test]
@@ -230,7 +241,7 @@ public class TrackingServiceAggregateDailyActivityTests
 
         var result = TrackingService.SplitChargerSessions([stillCharging]);
 
-        Assert.That(result, Is.EqualTo(new[] { stillCharging }));
+        Assert.That(result, Is.EqualTo([stillCharging]));
     }
 
     [Test]
@@ -243,7 +254,7 @@ public class TrackingServiceAggregateDailyActivityTests
 
         var result = TrackingService.SplitChargerSessions([arrivedFull]);
 
-        Assert.That(result, Is.EqualTo(new[] { arrivedFull }));
+        Assert.That(result, Is.EqualTo([arrivedFull]));
     }
 
     [Test]
@@ -259,13 +270,19 @@ public class TrackingServiceAggregateDailyActivityTests
 
         Assert.That(result, Has.Count.EqualTo(2));
         var parked = result[0];
-        Assert.That(parked.Activity, Is.EqualTo("PARKED_IN_CS"));
-        Assert.That(parked.Start, Is.EqualTo(completedAt));
-        Assert.That(parked.End, Is.Null, "the still-ongoing half must stay open-ended, not frozen at 'now'");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(parked.Activity, Is.EqualTo("PARKED_IN_CS"));
+            Assert.That(parked.Start, Is.EqualTo(completedAt));
+            Assert.That(parked.End, Is.Null, "the still-ongoing half must stay open-ended, not frozen at 'now'");
+        }
 
         var charging = result[1];
-        Assert.That(charging.Activity, Is.EqualTo("CHARGING"));
-        Assert.That(charging.Start, Is.EqualTo(ongoing.Start));
-        Assert.That(charging.End, Is.EqualTo(completedAt));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(charging.Activity, Is.EqualTo("CHARGING"));
+            Assert.That(charging.Start, Is.EqualTo(ongoing.Start));
+            Assert.That(charging.End, Is.EqualTo(completedAt));
+        }
     }
 }
