@@ -389,6 +389,8 @@ the other.
   and then run the compiled `.dll` directly (not `dotnet run` — see above)
 - `startall.sh` / `stopall.sh` — start/stop one tmux `track` session per
   mower (see **Running `track` unattended** above)
+- `startweb.sh` / `stopweb.sh` — start/stop `AutomowerWeb` in a detached
+  tmux session (see **Web dashboard** below)
 - `bootstrap.sh` / `fix-permissions.sh` — one-time container provisioning
   and the `chmod +x` fallback (see **Prerequisites**/**Running** above)
 - `automower.slnx` — the solution file referencing all four projects
@@ -414,6 +416,28 @@ dotnet run --project AutomowerWeb
 ```
 
 then open the URL it prints (default `http://localhost:5152`).
+
+**On the QNAP container, run it via `startweb.sh`/`stopweb.sh`** instead of
+a plain `dotnet run` you'd have to babysit in a terminal — same pattern as
+`startall.sh`/`stopall.sh` for `track`: a detached tmux session that
+survives an SSH disconnect, building once and running the compiled `.dll`
+directly (not `dotnet run`, for the same graceful-Ctrl+C-forwarding reason
+as `am.sh`). Bound to all interfaces (`0.0.0.0:5152` by default,
+`./startweb.sh <port>` to override) so it's reachable from outside the
+container, not just `localhost`:
+
+```
+./startweb.sh          # builds, starts in tmux session "automowerweb"
+./stopweb.sh            # graceful stop (Ctrl+C, falls back to force-kill)
+```
+
+**If you rebuild/pull new code, `startweb.sh` won't pick it up on its
+own** — a tmux session that's already running keeps whatever was loaded in
+memory when it started, same as any other long-running process here (see
+`track`'s equivalent gotcha above). Run `./stopweb.sh` then `./startweb.sh`
+to actually restart it on the new build; `./startweb.sh` alone just says
+"already running" and does nothing if a session already exists under that
+name.
 
 **No auto-refresh timer on the dashboard, by design.** It's a 4th
 independent process authenticating with the same Husqvarna app key/secret
@@ -499,6 +523,13 @@ then browse to `http://127.0.0.1:<local-port>` (use the literal
 the IPv4 loopback, while `localhost` can resolve to `::1` first and find
 nothing listening). Pick a local port that isn't already in use by a copy
 of the app running directly on your own machine.
+
+**The tunnel only exists while that SSH session stays connected.** Closing
+the terminal (or it disconnecting for any reason) silently kills the
+forward — the browser will just fail to load with no obvious explanation,
+since nothing about the failure mentions the tunnel at all. If the
+dashboard was working and then suddenly isn't, check whether that terminal
+is still open before troubleshooting anything else.
 
 If this fails with `channel N: open failed: administratively prohibited`,
 the QNAP's sshd has `AllowTcpForwarding` disabled — see

@@ -44,15 +44,16 @@ else
     ln -sf /usr/local/dotnet/dotnet /usr/local/bin/dotnet
 fi
 
-echo "== PATH wrappers (am, startall, stopall) =="
-# Thin delegating wrappers, not symlinks: am.sh/startall.sh/stopall.sh find
-# their own repo root via 'dirname "${BASH_SOURCE[0]}"', which a symlink on
-# PATH would break (it'd resolve to the symlink's own directory instead of
-# the repo). A separate wrapper file that execs the real script by its
-# resolved absolute path sidesteps that entirely - and bakes in wherever
-# this repo actually lives ($dir, resolved above from bootstrap.sh's own
-# location), rather than hardcoding /repos/Automower.
-for name in am startall stopall; do
+echo "== PATH wrappers (am, startall, stopall, startweb, stopweb) =="
+# Thin delegating wrappers, not symlinks: am.sh/startall.sh/stopall.sh/
+# startweb.sh/stopweb.sh find their own repo root via 'dirname
+# "${BASH_SOURCE[0]}"', which a symlink on PATH would break (it'd resolve to
+# the symlink's own directory instead of the repo). A separate wrapper file
+# that execs the real script by its resolved absolute path sidesteps that
+# entirely - and bakes in wherever this repo actually lives ($dir, resolved
+# above from bootstrap.sh's own location), rather than hardcoding
+# /repos/Automower.
+for name in am startall stopall startweb stopweb; do
     printf '#!/usr/bin/env bash\nexec "%s/%s.sh" "$@"\n' "$dir" "$name" > /usr/local/bin/"$name"
     chmod +x /usr/local/bin/"$name"
     echo "  installed /usr/local/bin/$name -> $dir/$name.sh"
