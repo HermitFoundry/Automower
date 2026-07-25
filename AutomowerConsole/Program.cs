@@ -566,10 +566,10 @@ async Task CommandSessions(string[] sessionArgs)
 
 // One line per calendar day: total Mowing time per work area that day
 // (repeated on the line for each additional area, summed if the same area
-// was mowed more than once), then Charging and (if any) Full last - neither
-// is tied to a work area, so both are outside that list, not part of it.
-// See TrackingService.AggregateDailyActivity for the day-attribution,
-// CHARGING/PARKED_IN_CS-combining, and Charging-vs-Full split rules.
+// was mowed more than once), then Charging and (if any) Parked last -
+// neither is tied to a work area, so both are outside that list, not part
+// of it. See TrackingService.AggregateDailyActivity for the day-attribution,
+// CHARGING/PARKED_IN_CS-combining, and Charging-vs-Parked split rules.
 async Task CommandDaily(string[] dailyArgs)
 {
     var resolved = await mowerService.ResolveMowerAsync(dailyArgs.FirstOrDefault());
@@ -590,9 +590,9 @@ async Task CommandDaily(string[] dailyArgs)
         {
             parts.Add($"Charging {day.Charging.FormatDuration()}");
         }
-        if (day.Full > TimeSpan.Zero)
+        if (day.Parked > TimeSpan.Zero)
         {
-            parts.Add($"Full {day.Full.FormatDuration()}");
+            parts.Add($"Parked {day.Parked.FormatDuration()}");
         }
 
         var date = day.Date.ToDateTime(TimeOnly.MinValue).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -654,7 +654,7 @@ void PrintUsage()
                                                  that poll) under each Charging/Parked session
           automower daily [mower]                One line per calendar day: total Mowing time per work
                                                  area that day (repeated per area), then Charging time
-                                                 and, if any, Full (charged but still parked) time
+                                                 and, if any, Parked (charged but not mowing) time
           automower help                        Show this help
         """);
 }

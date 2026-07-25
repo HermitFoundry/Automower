@@ -104,7 +104,7 @@ selection.
 | `schedule [mower]` | Show the calendar, refresh `.data/schedule.json`, and show the live next calendar/planned start |
 | `track [seconds] [mower]` | Adaptive-interval polling with logging to a per-mower `.data/track-<mower>.jsonl` (see below) |
 | `sessions [--calendar] [mower]` | Summarize a mower's track log into one line per mowing/charging/etc. session (see below) |
-| `daily [mower]` | One line per calendar day: total Mowing time per work area, then total Charging time (see below) |
+| `daily [mower]` | One line per calendar day: total Mowing time per work area, then Charging and Parked time (see below) |
 | `help` | Show usage |
 
 ### Examples
@@ -213,20 +213,29 @@ is needed — see **`calendar` vs `planner`** below for what each one means):
 
 `daily [mower]` rolls `sessions`' output up by day: total **Mowing** time per
 work area that day (repeated on the line for each additional area worked,
-summed together if the same area was mowed more than once that day), then a
-single combined **Charging** total last — charging isn't tied to a work
-area, so it's outside that list rather than part of it:
+summed together if the same area was mowed more than once that day), then
+**Charging** and, if any, **Parked** last — neither is tied to a work area,
+so both are outside that list rather than part of it:
 
 ```
 Daily activity for AM405X (newest first, from .data/track-AM405X.jsonl):
-  2026-07-21  Mowing 50m [Front Lawn]   Mowing 30m [Back Yard]   Charging 21h15m
+  2026-07-21  Mowing 50m [Front Lawn]   Mowing 30m [Back Yard]   Charging 3h20m   Parked 17h55m
   2026-07-20  Mowing 1h00m [Front Lawn]   Mowing 45m [Back Yard]   Charging 21h15m
 ```
 
-`Charging` combines `CHARGING` and `PARKED_IN_CS` into one "time spent at
-the charger" total. Days with only charging (or only mowing) simply omit the
-other half of the line. Other activities (`Going home`, `Leaving`,
-`Stopped`, ...) aren't represented — only the two totals that were asked for.
+`Charging`+`Parked` together are "time spent at the charger" (`CHARGING` and
+`PARKED_IN_CS` combined — the activity label alone is an unreliable signal
+for whether real charging is happening, not split further on that axis).
+What *does* split them: the poll where `track` observes battery reach 100%
+(see `` `track`: adaptive polling and logging `` above) marks the boundary —
+`Charging` is arrival → that point, `Parked` is that point → the mower
+leaving again (charged, but no longer actively charging). A stay that never
+reaches 100% before leaving (or is still ongoing) counts entirely as
+`Charging`, with no `Parked` portion — "still charging" as far as the data
+can tell; `Parked` is omitted from the line entirely when zero, same as
+`Charging`/`Mowing` being omitted when a day has none. Other activities
+(`Going home`, `Leaving`, `Stopped`, ...) aren't represented — only the
+totals that were asked for.
 
 **A session counts entirely toward the day it *started*** — same
 simplification `sessions` already makes for its own single date column, not

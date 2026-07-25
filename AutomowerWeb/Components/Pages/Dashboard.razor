@@ -79,7 +79,7 @@ else if (_cards.Count == 0 && _error is null)
             else
             {
                 <table class="week-table">
-                    <thead><tr><th>Date</th><th>Mowing</th><th>Charging</th><th>Full</th></tr></thead>
+                    <thead><tr><th>Date</th><th>Mowing</th><th>Charging</th><th>Parked</th></tr></thead>
                     <tbody>
                         @foreach (var day in card.LastWeek)
                         {
@@ -87,7 +87,7 @@ else if (_cards.Count == 0 && _error is null)
                                 <td>@day.Date.ToString("MMM d")</td>
                                 <td>@MowerDisplay.MowingCell(day.Mowing)</td>
                                 <td>@MowerDisplay.DurationCell(day.Charging)</td>
-                                <td>@MowerDisplay.DurationCell(day.Full)</td>
+                                <td>@MowerDisplay.DurationCell(day.Parked)</td>
                             </tr>
                         }
                     </tbody>

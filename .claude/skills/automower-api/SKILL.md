@@ -492,17 +492,22 @@ Three buckets per day: Mowing, summed per work area
 (`DailyAccumulator.AddMowing` finds-or-creates by `WorkAreaName` including
 `null`, so an unresolved-name area still gets its own bucket rather than
 merging into whichever other unnamed area happened first) via a private
-nested `DailyAccumulator` class; and Charging/Full, split from what used to
-be one combined `TrackingService.IsAtCharger` total (`CHARGING` +
+nested `DailyAccumulator` class; and Charging/Parked, split from what used
+to be one combined `TrackingService.IsAtCharger` total (`CHARGING` +
 `PARKED_IN_CS` together - still no finer split on *that* axis, the
 activity label itself remains an unreliable signal). The split instead uses
 `TrackSession.ChargeCompleteAt`: Charging is session-start → that point (or
 the whole session if `ChargeCompleteAt` is null - "still charging" as far
 as the data shows, same treatment for a genuinely-ongoing session and for
-an old log line that predates this field), Full is that point → session
-end. `Full` is omitted from a day's `daily` line entirely when zero (e.g.
-every charger session that day is still `Charging`-only), same convention
-already used for Charging. Sessions in neither bucket (`GOING_HOME`,
+an old log line that predates this field), Parked is that point → session
+end (charged but not actively charging anymore). `Parked` is omitted from a
+day's `daily` line entirely when zero (e.g. every charger session that day
+is still `Charging`-only), same convention already used for Charging.
+Named `Parked` rather than the earlier `Full` (renamed after it read oddly
+as a table column header in `AutomowerWeb` - see **Web dashboard** in
+`README.md`) - same field, same meaning, just a clearer name for the same
+"charged but sitting there, not mowing" concept. Sessions in neither bucket
+(`GOING_HOME`,
 `LEAVING`, `STOPPED_IN_GARDEN`, ...) are silently dropped from the rollup -
 not an oversight, just outside what was requested. Days that end up with no
 bucket populated (e.g. the only session that day was a 5-minute `Leaving`)

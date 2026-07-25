@@ -280,17 +280,18 @@ public class TrackingService(ScheduleService schedule)
     // the charger" total (the activity label itself is an unreliable signal
     // for whether real charging is happening - not attempted here), but that
     // total is now divided into Charging (session start -> the point battery
-    // first hit 100%, per TrackSession.ChargeCompleteAt) and Full (that point
-    // -> session end, i.e. sitting there already charged). A session with no
-    // ChargeCompleteAt (never reached 100% before it ended, or ended still
-    // ongoing, or predates the field existing) counts entirely as Charging,
-    // none as Full - "still charging" as far as this data can tell. Sessions
-    // that don't fit either bucket (Going home, Leaving, Stopped, ...) are
-    // not represented - only Mowing and Charging/Full were asked for. A
-    // session (and its Charging/Full split) is attributed entirely to its
-    // *start* day, same simplification 'sessions' itself makes for its
-    // single date column - an overnight charge isn't split across the two
-    // days it actually spans. Returned newest day first, matching 'sessions'.
+    // first hit 100%, per TrackSession.ChargeCompleteAt) and Parked (that
+    // point -> session end, i.e. sitting there already charged, not actively
+    // charging anymore). A session with no ChargeCompleteAt (never reached
+    // 100% before it ended, or ended still ongoing, or predates the field
+    // existing) counts entirely as Charging, none as Parked - "still
+    // charging" as far as this data can tell. Sessions that don't fit either
+    // bucket (Going home, Leaving, Stopped, ...) are not represented - only
+    // Mowing and Charging/Parked were asked for. A session (and its
+    // Charging/Parked split) is attributed entirely to its *start* day, same
+    // simplification 'sessions' itself makes for its single date column - an
+    // overnight charge isn't split across the two days it actually spans.
+    // Returned newest day first, matching 'sessions'.
     public static List<DailyActivity> AggregateDailyActivity(IEnumerable<TrackSession> sessions)
     {
         var byDay = new SortedDictionary<DateOnly, DailyAccumulator>();
@@ -311,7 +312,7 @@ public class TrackingService(ScheduleService schedule)
                 if (s.ChargeCompleteAt is { } completeAt)
                 {
                     acc.Charging += completeAt - s.Start;
-                    acc.Full += end - completeAt;
+                    acc.Parked += end - completeAt;
                 }
                 else
                 {
@@ -325,8 +326,8 @@ public class TrackingService(ScheduleService schedule)
         }
 
         var result = byDay
-            .Where(kv => kv.Value.Mowing.Count > 0 || kv.Value.Charging > TimeSpan.Zero || kv.Value.Full > TimeSpan.Zero)
-            .Select(kv => new DailyActivity(kv.Key, kv.Value.Mowing, kv.Value.Charging, kv.Value.Full))
+            .Where(kv => kv.Value.Mowing.Count > 0 || kv.Value.Charging > TimeSpan.Zero || kv.Value.Parked > TimeSpan.Zero)
+            .Select(kv => new DailyActivity(kv.Key, kv.Value.Mowing, kv.Value.Charging, kv.Value.Parked))
             .ToList();
         result.Reverse();
         return result;
@@ -336,7 +337,7 @@ public class TrackingService(ScheduleService schedule)
     {
         public List<WorkAreaTime> Mowing { get; } = [];
         public TimeSpan Charging;
-        public TimeSpan Full;
+        public TimeSpan Parked;
 
         public void AddMowing(string? workAreaName, TimeSpan duration)
         {
@@ -372,6 +373,6 @@ public record TrackSession(
     // finished" fact.
     DateTimeOffset? ChargeCompleteAt = null);
 
-public record DailyActivity(DateOnly Date, List<WorkAreaTime> Mowing, TimeSpan Charging, TimeSpan Full);
+public record DailyActivity(DateOnly Date, List<WorkAreaTime> Mowing, TimeSpan Charging, TimeSpan Parked);
 
 public record WorkAreaTime(string? WorkAreaName, TimeSpan Duration);
