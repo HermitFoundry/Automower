@@ -236,3 +236,18 @@ th { color: var(--muted); font-weight: 600; }
 
 .week-table { font-size: 0.82rem; margin-top: 0.25rem; }
 .week-table th, .week-table td { padding: 0.25rem 0.35rem; }
+
+.app-footer {
+    position: fixed;
+    left: 0.75rem;
+    bottom: 0.4rem;
+    font-size: 0.72rem;
+    color: var(--muted);
+    opacity: 0.65;
+}
+
+@media (max-width: 600px) {
+    /* Out of the way of card content on narrow screens rather than
+       overlapping it - reverts to a normal block at the end of the page. */
+    .app-footer { position: static; margin: 1rem 0 0 0.25rem; }
+}

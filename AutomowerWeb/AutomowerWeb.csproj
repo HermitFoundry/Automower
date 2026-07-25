@@ -6,10 +6,30 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+    <!-- MinVer computes the version from the nearest 'v*' git tag reachable
+         from HEAD plus commit height/sha - see the 'v0.9.0' tag at the repo
+         root. No tag reachable (e.g. a shallow clone) falls back to 0.0.0-alpha.0. -->
+    <MinVerTagPrefix>v</MinVerTagPrefix>
+    <Copyright>Terje Sandstrom</Copyright>
+    <!-- Baked in at build time (UTC), read back via AssemblyMetadataAttribute
+         in AppInfo.cs - the footer's "Built <date>" is literally when this
+         binary was compiled, not a runtime-computed "today". -->
+    <BuildDateUtc>$([System.DateTime]::UtcNow.ToString("yyyy-MM-dd"))</BuildDateUtc>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\AutomowerConsole.Core\AutomowerConsole.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MinVer" Version="7.0.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="BuildDate" Value="$(BuildDateUtc)" />
   </ItemGroup>
 
 </Project>

@@ -29,6 +29,15 @@ hand for each. `startall.sh` discovers the mower list from `.data/mowers.json`
 (fetching it first via `am.sh list` if missing) rather than hardcoding the 3
 current mower names, so it stays correct if a mower is added/renamed/removed.
 
+**Getting a shell on that container**: see README's "Connecting to the QNAP
+container over SSH" section for the two-hop pattern (host, then `docker exec`
+into the container) and the `ssh automower` alias shortcut - and
+`qnap_infrastructure_setup.md` for the deeper QNAP-specific gotchas behind
+it (`docker` not on `PATH` for non-interactive/`RemoteCommand` invocations,
+Container Station's port-mapping limitations, the `AllowTcpForwarding`
+saga). Both are host/infra knowledge, not application code, so they're kept
+out of this skill doc's own body.
+
 Session naming and the mower query passed to `track` both use just the
 **model prefix** of each mower's name - `${name%% *}` in bash, e.g. "AM430X"
 out of "AM430X NERA" - relying on the CLI's existing name-contains matching

@@ -24,7 +24,12 @@ The `docker` CLI binary lives at
 it's on `PATH` for an *interactive login* shell (via `.profile`/`.bashrc`),
 but **not** for a non-interactive one, so `ssh host -t "docker ..."` needs
 the full path spelled out explicitly - it won't resolve `docker` from a bare
-command string the way an interactive shell would.
+command string the way an interactive shell would. **This bit twice**: the
+same PATH gap applies to an SSH config `RemoteCommand` too (it runs the same
+way `-t "command"` does) - a `ssh automower` alias set up with a bare
+`docker exec ...` failed with `docker: command not found` the first time,
+fixed by using the full path in `RemoteCommand` as well, not just in
+one-off `-t` invocations.
 
 The container's ID as of this work: `a87b71026a68` (also its hostname, per
 `root@a87b71026a68:...` in every container shell prompt). This is stable

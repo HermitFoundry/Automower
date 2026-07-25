@@ -469,9 +469,13 @@ there is two hops, easy to conflate:
    Host automower
        HostName <qnap-ip>
        User <user>
-       RemoteCommand docker exec -it -w /repos/Automower <container-id> bash
+       RemoteCommand /share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker exec -it -w /repos/Automower <container-id> bash
        RequestTTY yes
    ```
+
+   Full `docker` path again here for the same reason as above — `RemoteCommand`
+   runs the same way as `ssh host -t "command"`, so a bare `docker` won't
+   resolve.
 
 The container's ID is stable across stop/start, but **changes if the
 container is ever recreated** — update any saved alias if that happens.
