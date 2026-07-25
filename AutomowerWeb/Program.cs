@@ -19,6 +19,16 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
+// Default antiforgery cookie policy doesn't follow Request.IsHttps the way
+// a plain CookieBuilder does - confirmed by testing (the cookie came back
+// without the Secure attribute even once UseForwardedHeaders correctly
+// reported IsHttps=true) - has to be set explicitly. SameAsRequest, not
+// Always, so startweb.dev's plain-http local/LAN path still works.
+builder.Services.AddAntiforgery(options =>
+{
+    options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+});
+
 // Same services the CLI uses, same singleton-per-run pattern (see
 // Program.cs in AutomowerConsole) - cheap, effectively-stateless wrappers
 // over AutomowerConnect.Instance/Storage, safe to share across requests.
