@@ -46,8 +46,27 @@ echo "== .NET SDK (net10.0, required by AutomowerConsole.csproj) =="
 if command -v dotnet >/dev/null 2>&1 && dotnet --list-sdks | grep -q '^10\.'; then
     echo "  dotnet SDK 10.x already installed, skipping"
 else
-    curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 10.0 --install-dir /usr/local/dotnet
-    ln -sf /usr/local/dotnet/dotnet /usr/local/bin/dotnet
+    # apt-based install (Microsoft's own package feed), not the
+    # dotnet-install.sh tarball this used to run - that tarball's own
+    # internal 'tar' extraction hit a real, reproducible "Cannot change
+    # mode ... Bad address" failure on this QNAP Container Station setup (a
+    # storage/filesystem-level quirk, not a bootstrap.sh bug - confirmed by
+    # the exact same command succeeding on a plain apt package instead).
+    # Worse, even worked around, the tarball drops SDK files with no system
+    # dependencies installed - missing libicu crashed 'dotnet' outright
+    # ("Couldn't find a valid ICU package"). apt pulls that in automatically
+    # as a real package dependency and never goes through the tar codepath
+    # at all - confirmed working end-to-end on this same QNAP setup,
+    # 2026-07-25 (Microsoft does publish a Debian 13-specific config with a
+    # working signing key - the generic/older debian/12 one hit its own
+    # unrelated failure, a SHA-1 signature rejected by trixie's stricter
+    # default crypto policy).
+    debian_version="$(. /etc/os-release && echo "$VERSION_ID")"
+    curl -sSL -o /tmp/packages-microsoft-prod.deb "https://packages.microsoft.com/config/debian/${debian_version}/packages-microsoft-prod.deb"
+    dpkg -i /tmp/packages-microsoft-prod.deb
+    rm /tmp/packages-microsoft-prod.deb
+    apt-get update
+    apt-get install -y dotnet-sdk-10.0
 fi
 
 echo "== PATH wrappers (am, startall, stopall, startweb, stopweb, startweb.dev, stopweb.dev) =="
