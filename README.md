@@ -519,6 +519,15 @@ Internet --(Altibox: forward 80->8880, 443->8443 only, not the router's
   property), no controls. `Caddyfile` has a one-line `basicauth` upgrade
   path commented in, ready whenever it's wanted, without touching
   `AutomowerWeb` itself.
+- **Serving a second site later doesn't need a new container, port, or
+  router rule** — Caddy already owns the only forwarded ports (8880/8443)
+  and dispatches by hostname/path to as many backends as wanted. The free
+  myQNAPcloud name is one hostname per NAS, not per app, but a second site
+  can share it via a path (`terje-ts673a.myqnapcloud.com/otherapp/`) or get
+  its own hostname (e.g. a `hermit.no` subdomain) pointed at the same
+  public IP — either way it's just another block in `Caddyfile`, which gets
+  its own automatic Let's Encrypt cert with no extra config. See
+  `Caddyfile`'s own comments for both patterns.
 
 ## Connecting to the QNAP container over SSH
 

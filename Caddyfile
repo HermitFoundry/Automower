@@ -34,3 +34,26 @@
     #     terje {$AUTOMOWER_BASIC_AUTH_HASH}
     # }
 }
+
+# Serving a second site later doesn't need a new container, port, or
+# Altibox rule - this Caddy instance already owns the only forwarded ports
+# (8880/8443) and can dispatch by hostname or path to as many backends as
+# wanted:
+#
+#   - Same hostname, different path - no new DNS name needed at all:
+#       {$AUTOMOWER_HOSTNAME} {
+#           handle_path /otherapp/* {
+#               reverse_proxy <other-upstream>
+#           }
+#           reverse_proxy {$AUTOMOWER_UPSTREAM}   # falls through to this one
+#       }
+#
+#   - Different hostname, same Caddy instance - needs a second DNS name
+#     pointed at this same public IP (e.g. a hermit.no subdomain - the free
+#     myQNAPcloud name is one hostname per NAS, not per app), then just
+#     another site block here. Caddy requests/renews its own Let's Encrypt
+#     cert per hostname automatically, no extra config beyond the block
+#     itself:
+#       otherapp.hermit.no {
+#           reverse_proxy <other-upstream>
+#       }
