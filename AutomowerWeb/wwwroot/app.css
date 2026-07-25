@@ -233,3 +233,6 @@ section h2 { margin-top: 0; font-size: 1.05rem; }
 table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); font-weight: 600; }
+
+.week-table { font-size: 0.82rem; margin-top: 0.25rem; }
+.week-table th, .week-table td { padding: 0.25rem 0.35rem; }

@@ -71,6 +71,29 @@ else if (_cards.Count == 0 && _error is null)
                 </ul>
             }
 
+            <h3>📊 Last 7 days</h3>
+            @if (card.LastWeek.Count == 0)
+            {
+                <p class="muted small">No track history yet.</p>
+            }
+            else
+            {
+                <table class="week-table">
+                    <thead><tr><th>Date</th><th>Mowing</th><th>Charging</th><th>Full</th></tr></thead>
+                    <tbody>
+                        @foreach (var day in card.LastWeek)
+                        {
+                            <tr>
+                                <td>@day.Date.ToString("MMM d")</td>
+                                <td>@MowerDisplay.MowingCell(day.Mowing)</td>
+                                <td>@MowerDisplay.DurationCell(day.Charging)</td>
+                                <td>@MowerDisplay.DurationCell(day.Full)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+
             <a class="details-link" href="@($"/mower/{Uri.EscapeDataString(card.Name)}")">More details →</a>
         </div>
     }
@@ -116,6 +139,7 @@ else if (_cards.Count == 0 && _error is null)
 
                 var sessions = TrackingService.SummarizeSessions(mower.Name, includeCalendarInfo: false);
                 var today = sessions.Where(s => s.Start.Date == DateTimeOffset.Now.Date).ToList();
+                var lastWeek = TrackingService.SummarizeDailyActivity(mower.Name).Take(7).ToList();
 
                 cards.Add(new MowerCard(
                     mower.Name,
@@ -124,7 +148,8 @@ else if (_cards.Count == 0 && _error is null)
                     a.Battery.BatteryPercent,
                     workAreaName,
                     nextStart,
-                    today));
+                    today,
+                    lastWeek));
             }
 
             _cards = cards;
@@ -156,5 +181,6 @@ else if (_cards.Count == 0 && _error is null)
         int BatteryPercent,
         string? WorkAreaName,
         string NextStartLabel,
-        List<TrackSession> TodaySessions);
+        List<TrackSession> TodaySessions,
+        List<DailyActivity> LastWeek);
 }

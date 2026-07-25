@@ -385,7 +385,13 @@ the other.
   tested — `TrackingService`, etc.)
 - **`AutomowerWeb/`** — the Blazor web dashboard, see **Web dashboard**
   below
-- `am.cmd` / `am.sh` / `automower.slnx` at the repo root
+- `am.cmd` / `am.sh` — shortcuts that build `AutomowerConsole.csproj` once
+  and then run the compiled `.dll` directly (not `dotnet run` — see above)
+- `startall.sh` / `stopall.sh` — start/stop one tmux `track` session per
+  mower (see **Running `track` unattended** above)
+- `bootstrap.sh` / `fix-permissions.sh` — one-time container provisioning
+  and the `chmod +x` fallback (see **Prerequisites**/**Running** above)
+- `automower.slnx` — the solution file referencing all four projects
 
 Run the tests with `dotnet test`.
 
@@ -420,10 +426,79 @@ continuously watching. It loads once per page visit and on an explicit
 **Not yet deployed anywhere** — running it in its own container (separate
 from the one running `track`), exposing it via router port-forwarding, and
 adding auth are all separate, later steps, not part of what's built here.
-- `am.cmd` / `am.sh` — shortcuts that build `AutomowerConsole.csproj` once
-  and then run the compiled `.dll` directly (not `dotnet run` — see above)
-- `startall.sh` / `stopall.sh` — start/stop one tmux `track` session per
-  mower (see **Running `track` unattended** above)
 
-For API implementation notes (auth flow, endpoint quirks, timestamp units,
+## Connecting to the QNAP container over SSH
+
+The account's long-running `track` sessions (and, for now, ad hoc testing of
+`AutomowerWeb`) live in a Debian container on a QNAP NAS. Getting a shell
+there is two hops, easy to conflate:
+
+1. **The QNAP host itself** — plain SSH, lands in the NAS's own OS, not the
+   container:
+
+   ```
+   ssh <user>@<qnap-ip>
+   ```
+
+2. **Into the container, at the repo directory** — from that host shell:
+
+   ```
+   docker exec -it -w /repos/Automower <container-id> bash
+   ```
+
+   Combine both into one command from your own machine:
+
+   ```
+   ssh <user>@<qnap-ip> -t "docker exec -it -w /repos/Automower <container-id> bash"
+   ```
+
+   `docker` isn't on `PATH` for a non-interactive shell like that `-t`
+   invocation (only for an interactive login shell) — if you get
+   `docker: command not found`, use the full path instead of a bare
+   `docker`, e.g. `/share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker`
+   (varies by QNAP volume label - `which docker` from an interactive host
+   login finds it).
+
+   Worth saving as an SSH config alias so it's just `ssh automower`:
+
+   ```
+   # ~/.ssh/config
+   Host automower
+       HostName <qnap-ip>
+       User <user>
+       RemoteCommand docker exec -it -w /repos/Automower <container-id> bash
+       RequestTTY yes
+   ```
+
+The container's ID is stable across stop/start, but **changes if the
+container is ever recreated** — update any saved alias if that happens.
+
+### Testing `AutomowerWeb` from your own machine via an SSH tunnel
+
+Useful when you want to check something in a browser without exposing any
+port on the QNAP/router — e.g. verifying a change works on the container
+before it's worth setting up real LAN/internet-facing access, or any time
+you don't want to touch the running container's network config just to look
+at something. Tunnel straight to the container's internal IP through the
+QNAP host as the relay (find the container's IP in Container Station → Edit
+Container → Network):
+
+```
+ssh -L <local-port>:<container-ip>:5152 <user>@<qnap-ip>
+```
+
+then browse to `http://127.0.0.1:<local-port>` (use the literal
+`127.0.0.1`, not `localhost` — Windows OpenSSH's `-L` sometimes only binds
+the IPv4 loopback, while `localhost` can resolve to `::1` first and find
+nothing listening). Pick a local port that isn't already in use by a copy
+of the app running directly on your own machine.
+
+If this fails with `channel N: open failed: administratively prohibited`,
+the QNAP's sshd has `AllowTcpForwarding` disabled — see
+`qnap_infrastructure_setup.md` for the fix (and why the obvious fix, editing
+`/etc/ssh/sshd_config`, doesn't work on this QNAP).
+
+For deeper QNAP/Container Station operational notes (timezone, port
+mapping, this SSH forwarding issue) see `qnap_infrastructure_setup.md`. For
+API implementation notes (auth flow, endpoint quirks, timestamp units,
 external references) see `.claude/skills/automower-api/SKILL.md`.

@@ -1,3 +1,5 @@
+using AutomowerConsole.Core;
+
 namespace AutomowerWeb;
 
 // Presentation-only mapping from raw API activity/connection state to an
@@ -42,4 +44,12 @@ public static class MowerDisplay
         "UNKNOWN" => "Unknown",
         _ => activity,
     };
+
+    // Shared by Dashboard's "last 7 days" block and MowerDetails' full daily
+    // rollup table, so the two don't drift into slightly different formats.
+    public static string MowingCell(List<WorkAreaTime> mowing) => mowing.Count == 0
+        ? "—"
+        : string.Join(", ", mowing.Select(m => $"{m.Duration.FormatDuration()}{(m.WorkAreaName is null ? "" : $" [{m.WorkAreaName}]")}"));
+
+    public static string DurationCell(TimeSpan span) => span > TimeSpan.Zero ? span.FormatDuration() : "—";
 }

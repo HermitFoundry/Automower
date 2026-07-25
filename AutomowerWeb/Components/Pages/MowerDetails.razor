@@ -110,9 +110,9 @@ else if (_detail is not null && _stored is not null)
                     {
                         <tr>
                             <td>@day.Date.ToString("yyyy-MM-dd")</td>
-                            <td>@(day.Mowing.Count == 0 ? "—" : string.Join(", ", day.Mowing.Select(m => $"{m.Duration.FormatDuration()}{(m.WorkAreaName is null ? "" : $" [{m.WorkAreaName}]")}")))</td>
-                            <td>@(day.Charging > TimeSpan.Zero ? day.Charging.FormatDuration() : "—")</td>
-                            <td>@(day.Full > TimeSpan.Zero ? day.Full.FormatDuration() : "—")</td>
+                            <td>@MowerDisplay.MowingCell(day.Mowing)</td>
+                            <td>@MowerDisplay.DurationCell(day.Charging)</td>
+                            <td>@MowerDisplay.DurationCell(day.Full)</td>
                         </tr>
                     }
                 </tbody>
