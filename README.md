@@ -530,13 +530,13 @@ there is two hops, easy to conflate:
 2. **Into the container, at the repo directory** — from that host shell:
 
    ```
-   docker exec -it -w /repos/Automower <container-id> bash
+   docker exec -it -w /repos/Automower <container-name-or-id> bash
    ```
 
    Combine both into one command from your own machine:
 
    ```
-   ssh <user>@<qnap-ip> -t "docker exec -it -w /repos/Automower <container-id> bash"
+   ssh <user>@<qnap-ip> -t "docker exec -it -w /repos/Automower <container-name-or-id> bash"
    ```
 
    `docker` isn't on `PATH` for a non-interactive shell like that `-t`
@@ -556,7 +556,7 @@ there is two hops, easy to conflate:
    Host automower
        HostName <qnap-ip>
        User <user>
-       RemoteCommand /share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker exec -it -w /repos/Automower <container-id> bash
+       RemoteCommand /share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker exec -it -w /repos/Automower <container-name-or-id> bash
        RequestTTY yes
    ```
 

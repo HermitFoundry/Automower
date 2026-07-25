@@ -14,9 +14,11 @@ Two separate SSH hops, easy to conflate:
   OS, not the container. `docker` isn't on `PATH` here by default for a
   plain login shell in a non-interactive invocation (see below).
 - **Inside the container**: from the host shell,
-  `docker exec -it -w /repos/Automower <container-id> bash`. Combine into
-  one hop with `ssh terje@192.168.10.142 -t "docker exec -it -w
-  /repos/Automower <container-id> bash"`, or an SSH config `Host` alias with
+  `docker exec -it -w /repos/Automower debian-dev1 bash` (container *name*,
+  not the hex ID - either works with `docker exec`, but the name is the
+  human-readable one and is what's actually used in the SSH alias below).
+  Combine into one hop with `ssh terje@192.168.10.142 -t "docker exec -it -w
+  /repos/Automower debian-dev1 bash"`, or an SSH config `Host` alias with
   `RemoteCommand` set the same way.
 
 The `docker` CLI binary lives at
@@ -31,10 +33,14 @@ way `-t "command"` does) - a `ssh automower` alias set up with a bare
 fixed by using the full path in `RemoteCommand` as well, not just in
 one-off `-t` invocations.
 
-The container's ID as of this work: `a87b71026a68` (also its hostname, per
-`root@a87b71026a68:...` in every container shell prompt). This is stable
-across stop/start, but **changes if the container is ever recreated** - any
-saved SSH alias hardcoding it will need updating if that happens.
+**Container name: `debian-dev1`.** The hex ID as of this work,
+`a87b71026a68` (also its hostname, per `root@a87b71026a68:...` in every
+container shell prompt), still works interchangeably with `docker exec`
+etc., but the name is what's actually used going forward (docs, the SSH
+alias) since it's human-readable and doesn't require looking anything up.
+Both the name and the ID are stable across stop/start, but **both change if
+the container is ever recreated** - any saved SSH alias will need updating
+if that happens.
 
 ## Timezone
 
