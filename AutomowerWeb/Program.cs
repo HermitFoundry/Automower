@@ -1,6 +1,7 @@
 using AutomowerConsole.Core;
 using AutomowerWeb;
 using AutomowerWeb.Components;
+using Microsoft.AspNetCore.HttpOverrides;
 
 // ContentRootPath anchored to the app's own location (AppContext.
 // BaseDirectory), not left to default to the launching shell's current
@@ -35,6 +36,29 @@ builder.Services.AddSingleton<LocationService>();
 builder.Services.AddSingleton<WeatherService>();
 
 var app = builder.Build();
+
+// Caddy terminates TLS and reverse-proxies here over plain HTTP on the
+// QNAP's own LAN (see Caddyfile / AUTOMOWER_UPSTREAM) - without this,
+// Kestrel has no way to know the original request was HTTPS, so every
+// scheme-dependent decision downstream (the antiforgery cookie's Secure
+// flag, UseHttpsRedirection, any absolute URL the app itself generates)
+// silently assumes http. That's what caused the browser to flag the site
+// as "not secure" (confirmed via its own "connection isn't secure" +
+// "certificate is valid" combination - not an actual cert problem) even
+// though the wire-level TLS from Caddy outward was genuinely fine.
+// KnownNetworks/KnownProxies cleared deliberately: Caddy reaches Kestrel
+// via QNAP's own Docker/LXD-backed bridge networking, whose exact source
+// IP isn't pinned down (see qnap_infrastructure_setup.md) - acceptable
+// here since Kestrel's own port (5152) is never forwarded past the LAN
+// (only Caddy's 8880/8443 are internet-facing), so nothing outside the
+// LAN can spoof these headers directly against Kestrel.
+var forwardedHeadersOptions = new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+};
+forwardedHeadersOptions.KnownIPNetworks.Clear();
+forwardedHeadersOptions.KnownProxies.Clear();
+app.UseForwardedHeaders(forwardedHeadersOptions);
 
 // Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
