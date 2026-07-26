@@ -327,6 +327,14 @@ public class TrackingService(ScheduleService schedule)
     public List<DailyActivity> SummarizeDailyActivity(string mowerName)
         => AggregateDailyActivity(SummarizeSessions(mowerName, includeCalendarInfo: false));
 
+    // Same idea as SummarizeDailyActivity, one calendar month per row instead
+    // of one day - the long-range view once even the daily rollup gets too
+    // long to be useful (see AutomowerWeb's MowerDetails page: session
+    // history is windowed to the last 7 days, daily to the last month,
+    // monthly is the only one of the three left unwindowed).
+    public List<MonthlyActivity> SummarizeMonthlyActivity(string mowerName)
+        => AggregateMonthlyActivity(SummarizeSessions(mowerName, includeCalendarInfo: false));
+
     // Pure: total mowing time per work area per day (summed if the same area
     // was mowed more than once that day), plus a charger-time split per day -
     // CHARGING and PARKED_IN_CS are still combined into one "time spent at
@@ -345,19 +353,37 @@ public class TrackingService(ScheduleService schedule)
     // simplification 'sessions' itself makes for its single date column - an
     // overnight charge isn't split across the two days it actually spans.
     // Returned newest day first, matching 'sessions'.
-    public static List<DailyActivity> AggregateDailyActivity(IEnumerable<TrackSession> sessions)
+    public static List<DailyActivity> AggregateDailyActivity(IEnumerable<TrackSession> sessions) =>
+        AccumulateByBucket(sessions, t => DateOnly.FromDateTime(t.Date))
+            .Select(b => new DailyActivity(b.Bucket, b.Acc.Mowing, b.Acc.Charging, b.Acc.Parked))
+            .ToList();
+
+    // Same aggregation as AggregateDailyActivity, bucketed by calendar month
+    // (the 1st of each month standing in for "this month") instead of by
+    // day - see AccumulateByBucket, which both share.
+    public static List<MonthlyActivity> AggregateMonthlyActivity(IEnumerable<TrackSession> sessions) =>
+        AccumulateByBucket(sessions, t => new DateOnly(t.Year, t.Month, 1))
+            .Select(b => new MonthlyActivity(b.Bucket, b.Acc.Mowing, b.Acc.Charging, b.Acc.Parked))
+            .ToList();
+
+    // Shared by AggregateDailyActivity/AggregateMonthlyActivity - identical
+    // charging/parked-split and per-work-area mowing accumulation, differing
+    // only in how a session's Start maps to a bucket (a day vs. a month).
+    // Returned newest bucket first, matching 'sessions'.
+    private static List<(DateOnly Bucket, DailyAccumulator Acc)> AccumulateByBucket(
+        IEnumerable<TrackSession> sessions, Func<DateTimeOffset, DateOnly> bucketOf)
     {
-        var byDay = new SortedDictionary<DateOnly, DailyAccumulator>();
+        var byBucket = new SortedDictionary<DateOnly, DailyAccumulator>();
 
         foreach (var s in sessions.OrderBy(s => s.Start))
         {
-            var day = DateOnly.FromDateTime(s.Start.Date);
+            var bucket = bucketOf(s.Start);
             var end = s.End ?? DateTimeOffset.Now;
 
-            if (!byDay.TryGetValue(day, out var acc))
+            if (!byBucket.TryGetValue(bucket, out var acc))
             {
                 acc = new DailyAccumulator();
-                byDay[day] = acc;
+                byBucket[bucket] = acc;
             }
 
             if (IsAtCharger(s.Activity))
@@ -378,12 +404,11 @@ public class TrackingService(ScheduleService schedule)
             }
         }
 
-        var result = byDay
+        return byBucket
             .Where(kv => kv.Value.Mowing.Count > 0 || kv.Value.Charging > TimeSpan.Zero || kv.Value.Parked > TimeSpan.Zero)
-            .Select(kv => new DailyActivity(kv.Key, kv.Value.Mowing, kv.Value.Charging, kv.Value.Parked))
+            .Select(kv => (kv.Key, kv.Value))
+            .Reverse()
             .ToList();
-        result.Reverse();
-        return result;
     }
 
     private class DailyAccumulator
@@ -427,5 +452,10 @@ public record TrackSession(
     DateTimeOffset? ChargeCompleteAt = null);
 
 public record DailyActivity(DateOnly Date, List<WorkAreaTime> Mowing, TimeSpan Charging, TimeSpan Parked);
+
+// Month is always the 1st of that month (e.g. 2026-07-01 for July 2026) -
+// same shape as DailyActivity, just bucketed coarser; a caller displaying it
+// formats Month as "yyyy-MM" instead of "yyyy-MM-dd".
+public record MonthlyActivity(DateOnly Month, List<WorkAreaTime> Mowing, TimeSpan Charging, TimeSpan Parked);
 
 public record WorkAreaTime(string? WorkAreaName, TimeSpan Duration);

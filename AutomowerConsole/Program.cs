@@ -67,6 +67,9 @@ switch (command)
     case "daily":
         await CommandDaily(rest);
         break;
+    case "monthly":
+        await CommandMonthly(rest);
+        break;
     case "help":
     case "-h":
     case "--help":
@@ -600,6 +603,36 @@ async Task CommandDaily(string[] dailyArgs)
     }
 }
 
+async Task CommandMonthly(string[] monthlyArgs)
+{
+    var resolved = await mowerService.ResolveMowerAsync(monthlyArgs.FirstOrDefault());
+    if (resolved is null) return;
+    var (_, mowerName) = resolved.Value;
+
+    var months = trackingService.SummarizeMonthlyActivity(mowerName);
+    if (months.Count == 0) return;
+
+    Console.WriteLine($"Monthly activity for {mowerName} (newest first, from {Storage.GetTrackLogPath(mowerName)}):");
+    foreach (var month in months)
+    {
+        var parts = month.Mowing.Select(m => m.WorkAreaName is null
+            ? $"Mowing {m.Duration.FormatDuration()}"
+            : $"Mowing {m.Duration.FormatDuration()} [{m.WorkAreaName}]").ToList();
+
+        if (month.Charging > TimeSpan.Zero)
+        {
+            parts.Add($"Charging {month.Charging.FormatDuration()}");
+        }
+        if (month.Parked > TimeSpan.Zero)
+        {
+            parts.Add($"Parked {month.Parked.FormatDuration()}");
+        }
+
+        var label = month.Month.ToDateTime(TimeOnly.MinValue).ToString("yyyy-MM", CultureInfo.InvariantCulture);
+        Console.WriteLine($"  {label}  {string.Join("   ", parts)}");
+    }
+}
+
 string DescribeActivity(string activity) => activity switch
 {
     "MOWING" => "Mowing",
@@ -655,6 +688,7 @@ void PrintUsage()
           automower daily [mower]                One line per calendar day: total Mowing time per work
                                                  area that day (repeated per area), then Charging time
                                                  and, if any, Parked (charged but not mowing) time
+          automower monthly [mower]              Same as 'daily', one line per calendar month instead
           automower help                        Show this help
         """);
 }

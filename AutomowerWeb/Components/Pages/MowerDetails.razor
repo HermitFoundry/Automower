@@ -130,10 +130,10 @@ else if (_detail is not null && _stored is not null)
     </section>
 
     <section>
-        <h2>📊 Daily rollup</h2>
+        <h2>📊 Daily rollup (last month)</h2>
         @if (_days.Count == 0)
         {
-            <p class="muted small">No track history yet.</p>
+            <p class="muted small">No track history in the last month.</p>
         }
         else
         {
@@ -155,10 +155,35 @@ else if (_detail is not null && _stored is not null)
     </section>
 
     <section>
-        <h2>🕒 Session history</h2>
-        @if (_sessions.Count == 0)
+        <h2>📊 Monthly rollup</h2>
+        @if (_months.Count == 0)
         {
             <p class="muted small">No track history yet.</p>
+        }
+        else
+        {
+            <table>
+                <thead><tr><th>Month</th><th>Mowing</th><th>Charging</th><th>Parked</th></tr></thead>
+                <tbody>
+                    @foreach (var month in _months)
+                    {
+                        <tr>
+                            <td>@month.Month.ToString("yyyy-MM")</td>
+                            <td>@MowerDisplay.MowingCell(month.Mowing)</td>
+                            <td>@MowerDisplay.DurationCell(month.Charging)</td>
+                            <td>@MowerDisplay.DurationCell(month.Parked)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+
+    <section>
+        <h2>🕒 Session history (last 7 days)</h2>
+        @if (_sessions.Count == 0)
+        {
+            <p class="muted small">No track history in the last 7 days.</p>
         }
         else
         {
@@ -267,6 +292,7 @@ else if (_detail is not null && _stored is not null)
     private MowerData? _detail;
     private List<TrackSession> _sessions = [];
     private List<DailyActivity> _days = [];
+    private List<MonthlyActivity> _months = [];
     private List<MessageItem> _messages = [];
     private string? _location;
     private WeatherInfo? _weather;
@@ -283,8 +309,21 @@ else if (_detail is not null && _stored is not null)
             }
 
             _detail = await MowerDetailService.GetMowerDetailAsync(_stored.Id);
-            _sessions = TrackingService.SplitChargerSessions(TrackingService.SummarizeSessions(_stored.Name, includeCalendarInfo: false));
-            _days = TrackingService.SummarizeDailyActivity(_stored.Name);
+
+            // Windowed to keep the page from growing unbounded over months of
+            // history - session history (the finest grain) to a rolling week,
+            // daily rollup to a rolling month; the monthly rollup below is the
+            // one view deliberately left unwindowed, since it's already
+            // coarse enough not to grow out of hand.
+            var weekAgo = DateTimeOffset.Now.AddDays(-7);
+            var monthAgo = DateTimeOffset.Now.AddMonths(-1);
+            _sessions = TrackingService.SplitChargerSessions(TrackingService.SummarizeSessions(_stored.Name, includeCalendarInfo: false))
+                .Where(s => s.Start >= weekAgo)
+                .ToList();
+            _days = TrackingService.SummarizeDailyActivity(_stored.Name)
+                .Where(d => d.Date >= DateOnly.FromDateTime(monthAgo.Date))
+                .ToList();
+            _months = TrackingService.SummarizeMonthlyActivity(_stored.Name);
             _messages = (await MowerDetailService.GetMessagesAsync(_stored.Id))
                 .OrderByDescending(m => m.Time)
                 .Take(20)

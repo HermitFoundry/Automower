@@ -258,6 +258,54 @@ public class TrackingServiceAggregateDailyActivityTests
     }
 
     [Test]
+    public void AggregateMonthlyActivityCollapsesAllThreeDaysIntoOneJuly2026Row()
+    {
+        // The whole RealSessionHistory fixture sits within July 2026 - all
+        // three of AggregateDailyActivity's days should collapse into a
+        // single month row whose totals equal the sum of the three days.
+        var sessions = RealSessionHistory();
+        var days = TrackingService.AggregateDailyActivity(sessions);
+        var months = TrackingService.AggregateMonthlyActivity(sessions);
+
+        Assert.That(months, Has.Count.EqualTo(1));
+        var month = months[0];
+        Assert.That(month.Month, Is.EqualTo(new DateOnly(2026, 7, 1)));
+
+        var expectedCharging = days.Aggregate(TimeSpan.Zero, (sum, d) => sum + d.Charging);
+        var expectedParked = days.Aggregate(TimeSpan.Zero, (sum, d) => sum + d.Parked);
+        Assert.That(month.Charging, Is.EqualTo(expectedCharging));
+        Assert.That(month.Parked, Is.EqualTo(expectedParked));
+
+        // "(none)" stands in for a null WorkAreaName, only so it can be a
+        // non-null dictionary key - not a real work area name.
+        var expectedMowing = days.SelectMany(d => d.Mowing)
+            .GroupBy(m => m.WorkAreaName ?? "(none)")
+            .ToDictionary(g => g.Key, g => g.Aggregate(TimeSpan.Zero, (sum, m) => sum + m.Duration));
+        Assert.That(month.Mowing.Select(m => m.WorkAreaName ?? "(none)"), Is.EquivalentTo(expectedMowing.Keys));
+        foreach (var m in month.Mowing)
+        {
+            Assert.That(m.Duration, Is.EqualTo(expectedMowing[m.WorkAreaName ?? "(none)"]), $"Mowing duration wrong for [{m.WorkAreaName}]");
+        }
+    }
+
+    [Test]
+    public void AggregateMonthlyActivitySplitsSessionsAcrossMonthsIntoSeparateNewestFirstRows()
+    {
+        DateTimeOffset T(int month, int day, int hour) => new(2026, month, day, hour, 0, 0, TimeSpan.FromHours(2));
+
+        var juneMowing = new TrackSession(T(6, 30, 10), T(6, 30, 11), "MOWING", 90, 60, "oversiden", null, null, null);
+        var julyMowing = new TrackSession(T(7, 1, 10), T(7, 1, 11), "MOWING", 90, 60, "oversiden", null, null, null);
+
+        var months = TrackingService.AggregateMonthlyActivity([juneMowing, julyMowing]);
+
+        Assert.That(months.Select(m => m.Month), Is.EqualTo([
+            new DateOnly(2026, 7, 1),
+            new DateOnly(2026, 6, 1)
+        ]), "expected newest month first, matching AggregateDailyActivity's own ordering");
+        Assert.That(months, Has.All.Matches<MonthlyActivity>(m => m.Mowing.Single().Duration == TimeSpan.FromHours(1)));
+    }
+
+    [Test]
     public void SplitChargerSessionsSplitsAStillOngoingSessionUsingNowAsTheImplicitEnd()
     {
         // A real currently-ongoing stay (End is null) that reached 100% a
