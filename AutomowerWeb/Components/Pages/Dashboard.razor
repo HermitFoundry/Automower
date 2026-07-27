@@ -37,28 +37,43 @@ else if (_cards.Count == 0 && _error is null)
                 <h2>@card.Name</h2>
             </div>
 
-            <dl class="mower-facts">
-                <dt>Activity</dt>
-                <dd>@MowerDisplay.Label(card.Activity)</dd>
-                <dt>Battery</dt>
-                <dd>@MowerDisplay.BatteryLabel(card.BatteryPercent, card.Activity, card.RemainingChargingSeconds)</dd>
-                <dt>Work area</dt>
-                <dd>@(card.WorkAreaName ?? "—")</dd>
-                <dt>Connected</dt>
-                <dd>@(card.Connected ? "✅ yes" : "❌ no")</dd>
-                <dt>Next start</dt>
-                <dd>@card.NextStartLabel</dd>
-                @if (card.Location is not null)
-                {
-                    <dt>Location</dt>
-                    <dd>📍 @card.Location</dd>
-                }
-                @if (card.Weather is not null)
-                {
-                    <dt>Weather</dt>
-                    <dd>@MowerDisplay.WeatherIcon(card.Weather) @card.Weather.TemperatureCelsius.ToString("F0")°C, @MowerDisplay.WeatherLabel(card.Weather.WeatherCode)</dd>
-                }
-            </dl>
+            <div class="mower-top-row">
+                <dl class="mower-facts">
+                    <dt>Activity</dt>
+                    <dd>@MowerDisplay.Label(card.Activity)</dd>
+                    <dt>Battery</dt>
+                    <dd>@MowerDisplay.BatteryLabel(card.BatteryPercent, card.Activity, card.RemainingChargingSeconds)</dd>
+                    <dt>Work area</dt>
+                    <dd>@(card.WorkAreaName ?? "—")</dd>
+                    <dt>Connected</dt>
+                    <dd>@(card.Connected ? "✅ yes" : "❌ no")</dd>
+                    <dt>Next start</dt>
+                    <dd>@card.NextStartLabel</dd>
+                    @if (card.Location is not null)
+                    {
+                        <dt>Location</dt>
+                        <dd>📍 @card.Location</dd>
+                    }
+                    @if (card.Weather is not null)
+                    {
+                        <dt>Weather</dt>
+                        <dd>@MowerDisplay.WeatherIcon(card.Weather) @card.Weather.TemperatureCelsius.ToString("F0")°C, @MowerDisplay.WeatherLabel(card.Weather.WeatherCode)</dd>
+                    }
+                    <dt>Mowed</dt>
+                    <dd>@MowerDisplay.MowingCell(card.TodayMowing)</dd>
+                    <dt>Charging</dt>
+                    <dd>@MowerDisplay.DurationCell(card.TodayCharging)</dd>
+                </dl>
+                <div class="day-chart" title="Today, 06:00–18:00 (approximate)">
+                    <svg viewBox="0 0 100 100">
+                        <circle cx="50" cy="50" r="45" class="day-chart-bg" />
+                        @foreach (var slice in card.PieSlices)
+                        {
+                            <path d="@slice.PathData" fill="@slice.ColorVar"><title>@slice.Title</title></path>
+                        }
+                    </svg>
+                </div>
+            </div>
 
             <h3>📅 Today</h3>
             @if (card.TodaySessions.Count == 0)
@@ -143,8 +158,14 @@ else if (_cards.Count == 0 && _error is null)
 
                 var sessions = TrackingService.SummarizeSessions(mower.Name, includeCalendarInfo: false);
                 var today = TrackingService.SplitChargerSessions(
-                    sessions.Where(s => s.Start.Date == DateTimeOffset.Now.Date));
+                    sessions.Where(s => s.Start.Date == DateTimeOffset.Now.Date)).ToList();
                 var lastWeek = TrackingService.SummarizeDailyActivity(mower.Name).Take(7).ToList();
+
+                // Same already-split session list feeds the session list,
+                // the Mowed/Charging totals, and the pie chart, so none of
+                // the three can ever visually disagree with each other.
+                var todayTotals = TrackingService.AggregateDailyActivity(today).FirstOrDefault();
+                var pieSlices = MowerDisplay.BuildDayPieSlices(today);
 
                 // Newest breadcrumb (Positions[0]) as "where is it right
                 // now" - absent for a mower with no GPS capability/fix, in
@@ -170,7 +191,10 @@ else if (_cards.Count == 0 && _error is null)
                     location,
                     weather,
                     today,
-                    lastWeek));
+                    lastWeek,
+                    todayTotals?.Mowing ?? [],
+                    todayTotals?.Charging ?? TimeSpan.Zero,
+                    pieSlices));
             }
 
             _cards = cards;
@@ -199,5 +223,8 @@ else if (_cards.Count == 0 && _error is null)
         string? Location,
         WeatherInfo? Weather,
         List<TrackSession> TodaySessions,
-        List<DailyActivity> LastWeek);
+        List<DailyActivity> LastWeek,
+        List<WorkAreaTime> TodayMowing,
+        TimeSpan TodayCharging,
+        List<MowerDisplay.PieSlice> PieSlices);
 }

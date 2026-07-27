@@ -1,3 +1,4 @@
+using System.Globalization;
 using AutomowerConsole.Core;
 
 namespace AutomowerWeb;
@@ -177,4 +178,81 @@ public static class MowerDisplay
         96 or 99 => "Thunderstorm with hail",
         _ => "Unknown",
     };
+
+    // A single colored wedge in the "today at a glance" clock-face chart -
+    // PathData is a ready-to-render SVG <path d="..."> value.
+    public readonly record struct PieSlice(string PathData, string ColorVar, string Title);
+
+    // The chart's whole circle spans this fixed 12-hour window (not
+    // per-mower/dynamic) - simplest option that comfortably covers this
+    // account's real calendar schedules (observed 09:00-17:00 and similar),
+    // with slack on both ends. Deliberately approximate, per the user
+    // ("doesn't have to be superaccurate either, give it some slack") -
+    // sessions starting/ending outside the window are just clipped to it
+    // rather than resized to fit.
+    private const int ChartWindowStartHour = 6;
+    private const int ChartWindowHours = 12;
+
+    // Today's activity as clock-face pie wedges: 12 o'clock = window start
+    // (06:00), sweeping clockwise, a full revolution = the whole 12-hour
+    // window. Green = mowing, blue = actually charging, grey = everything
+    // else (parked, or a brief transitional activity like Leaving/Going
+    // home) - same three-color simplification MowerDisplay already applies
+    // elsewhere (CHARGING/PARKED_IN_CS summed as one "at the charger"
+    // total in the daily rollup). Expects `todaySessions` already run
+    // through TrackingService.SplitChargerSessions, same list the "Today"
+    // session list and the Mowed/Charging totals both use - so the chart,
+    // the list, and the totals can never visually disagree with each other.
+    public static List<PieSlice> BuildDayPieSlices(IReadOnlyList<TrackSession> todaySessions)
+    {
+        var now = DateTimeOffset.Now;
+        var windowStart = new DateTimeOffset(now.Year, now.Month, now.Day, ChartWindowStartHour, 0, 0, now.Offset);
+        var windowEnd = windowStart.AddHours(ChartWindowHours);
+
+        var slices = new List<PieSlice>();
+        foreach (var s in todaySessions)
+        {
+            var segStart = s.Start < windowStart ? windowStart : s.Start;
+            var segEndRaw = s.End ?? now;
+            var segEnd = segEndRaw > windowEnd ? windowEnd : segEndRaw;
+            if (segEnd <= segStart)
+            {
+                continue;
+            }
+
+            var startAngle = (segStart - windowStart).TotalHours / ChartWindowHours * 360.0;
+            var endAngle = (segEnd - windowStart).TotalHours / ChartWindowHours * 360.0;
+            var colorVar = s.Activity switch
+            {
+                "MOWING" => "var(--mowing)",
+                "CHARGING" => "var(--charging)",
+                _ => "var(--idle)",
+            };
+            var title = $"{Label(s.Activity)} {segStart:HH:mm}–{segEnd:HH:mm}";
+            slices.Add(new PieSlice(PieSlicePath(startAngle, endAngle), colorVar, title));
+        }
+        return slices;
+    }
+
+    // cx/cy/r match the SVG's own viewBox="0 0 100 100" in Dashboard.razor -
+    // 0deg is straight up (12 o'clock), increasing clockwise, matching how
+    // BuildDayPieSlices measures elapsed time from the window start.
+    private static string PieSlicePath(double startAngleDeg, double endAngleDeg)
+    {
+        const double cx = 50, cy = 50, r = 45;
+        static (double X, double Y) PointOnCircle(double angleDeg)
+        {
+            var rad = angleDeg * Math.PI / 180.0;
+            return (cx + (r * Math.Sin(rad)), cy - (r * Math.Cos(rad)));
+        }
+
+        var (x1, y1) = PointOnCircle(startAngleDeg);
+        var (x2, y2) = PointOnCircle(endAngleDeg);
+        var largeArcFlag = endAngleDeg - startAngleDeg > 180 ? 1 : 0;
+        // Explicit InvariantCulture, not relying on AutomowerWeb.csproj's
+        // InvariantGlobalization setting to make this safe by coincidence -
+        // an SVG path's numbers must use '.', never a locale decimal comma.
+        string F(double n) => n.ToString("F2", CultureInfo.InvariantCulture);
+        return $"M {cx},{cy} L {F(x1)},{F(y1)} A {r},{r} 0 {largeArcFlag} 1 {F(x2)},{F(y2)} Z";
+    }
 }
