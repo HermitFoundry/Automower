@@ -193,25 +193,40 @@ public static class MowerDisplay
     private const int ChartWindowStartHour = 6;
     private const int ChartWindowHours = 12;
 
-    // Today's activity as clock-face pie wedges: 12 o'clock = window start
-    // (06:00), sweeping clockwise, a full revolution = the whole 12-hour
-    // window. Green = mowing, blue = actually charging, grey = everything
-    // else (parked, or a brief transitional activity like Leaving/Going
-    // home) - same three-color simplification MowerDisplay already applies
-    // elsewhere (CHARGING/PARKED_IN_CS summed as one "at the charger"
-    // total in the daily rollup). Expects `todaySessions` already run
-    // through TrackingService.SplitChargerSessions, same list the "Today"
-    // session list and the Mowed/Charging totals both use - so the chart,
-    // the list, and the totals can never visually disagree with each other.
+    // Today's activity as clock-face pie wedges, oriented like a real analog
+    // clock - 12 (noon, the only "12" our 06:00-18:00 window ever reaches)
+    // at the top, 3pm at the right, 6 (am and pm - both ends of the window)
+    // at the bottom, 9am at the left - not "elapsed time since the window
+    // started" (that put 06:00 at the top instead of 6's actual clock
+    // position, confirmed wrong against a real screenshot). Only Mowing
+    // (green) and actually-Charging (blue) get their own wedge; everything
+    // else - parked, brief transitional activities, and any time with no
+    // data at all (before the first session, or not yet elapsed) - is left
+    // as the grey background circle showing through (see day-chart-bg in
+    // app.css), rather than drawing separate grey wedges over it. Expects
+    // `todaySessions` already run through TrackingService.SplitChargerSessions,
+    // same list the "Today" session list and the Mowed/Charging totals both
+    // use - so the chart, the list, and the totals can never visually
+    // disagree with each other.
     public static List<PieSlice> BuildDayPieSlices(IReadOnlyList<TrackSession> todaySessions)
     {
         var now = DateTimeOffset.Now;
         var windowStart = new DateTimeOffset(now.Year, now.Month, now.Day, ChartWindowStartHour, 0, 0, now.Offset);
         var windowEnd = windowStart.AddHours(ChartWindowHours);
 
+        // Position on the dial for a given moment, independent of the
+        // window - literally where a real clock's hour hand would point
+        // (mod 12, so 6am and 6pm land on the same "6" spot at the bottom).
+        static double ClockAngle(DateTimeOffset t) => ((t.Hour % 12) + (t.Minute / 60.0)) / 12.0 * 360.0;
+
         var slices = new List<PieSlice>();
         foreach (var s in todaySessions)
         {
+            if (s.Activity is not ("MOWING" or "CHARGING"))
+            {
+                continue;
+            }
+
             var segStart = s.Start < windowStart ? windowStart : s.Start;
             var segEndRaw = s.End ?? now;
             var segEnd = segEndRaw > windowEnd ? windowEnd : segEndRaw;
@@ -220,14 +235,16 @@ public static class MowerDisplay
                 continue;
             }
 
-            var startAngle = (segStart - windowStart).TotalHours / ChartWindowHours * 360.0;
-            var endAngle = (segEnd - windowStart).TotalHours / ChartWindowHours * 360.0;
-            var colorVar = s.Activity switch
-            {
-                "MOWING" => "var(--mowing)",
-                "CHARGING" => "var(--charging)",
-                _ => "var(--idle)",
-            };
+            var startAngle = ClockAngle(segStart);
+            var endAngleRaw = ClockAngle(segEnd);
+            // The window spans exactly one full 12-hour lap (06:00 and
+            // 18:00 share the same raw clock angle), so the only point a
+            // segment can cross is noon (the dial's own wrap point) -
+            // whenever that leaves the raw end angle behind the start
+            // angle, it means the segment crossed noon and needs a full
+            // lap added to keep sweeping forward instead of backward.
+            var endAngle = endAngleRaw < startAngle ? endAngleRaw + 360 : endAngleRaw;
+            var colorVar = s.Activity == "MOWING" ? "var(--mowing)" : "var(--charging)";
             var title = $"{Label(s.Activity)} {segStart:HH:mm}–{segEnd:HH:mm}";
             slices.Add(new PieSlice(PieSlicePath(startAngle, endAngle), colorVar, title));
         }
