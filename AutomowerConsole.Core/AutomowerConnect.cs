@@ -26,9 +26,39 @@ internal class AutomowerConnect(string appKey, string appSecret)
     public async Task AuthenticateAsync()
     {
         if (_authenticated) return;
-        await _client.AuthenticateAsync();
+        await AuthenticateWithRetryAsync();
         _authenticated = true;
     }
+
+    // This process is one of several independent clients sharing the same
+    // app key/secret (the 3 'track' daemons plus AutomowerWeb - see
+    // startall.sh's own staggered-start fix for the original discovery of
+    // this collision). Husqvarna's auth service rejects a token request as
+    // "simultaneous logins" if another one for the same client id lands too
+    // close to it in time - a real, purely transient collision (confirmed
+    // by a user report: reloading the dashboard moments later always
+    // succeeds). A short delay and retry is the fix; a genuinely bad app
+    // key/secret fails identically on every attempt and still surfaces
+    // once retries are exhausted, not silently swallowed.
+    private async Task AuthenticateWithRetryAsync()
+    {
+        const int maxAttempts = 3;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                await _client.AuthenticateAsync();
+                return;
+            }
+            catch (HttpRequestException ex) when (attempt < maxAttempts && IsSimultaneousLogins(ex))
+            {
+                await Task.Delay(TimeSpan.FromSeconds(3));
+            }
+        }
+    }
+
+    private static bool IsSimultaneousLogins(Exception ex)
+        => ex.Message.Contains("simultaneous.logins", StringComparison.OrdinalIgnoreCase);
 
     private async Task<T> WithAuthAsync<T>(Func<Task<T>> action)
     {
@@ -40,7 +70,7 @@ internal class AutomowerConnect(string appKey, string appSecret)
         catch (HttpRequestException)
         {
             // Likely an expired token on a long-running session - re-auth once and retry.
-            await _client.AuthenticateAsync();
+            await AuthenticateWithRetryAsync();
             _authenticated = true;
             return await action();
         }
