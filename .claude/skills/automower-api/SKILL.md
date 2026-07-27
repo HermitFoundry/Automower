@@ -743,20 +743,21 @@ Base URL: `https://api.amc.husqvarna.dev/v1`
   GPS/satellite search, lost WiFi/4G connectivity, or a charging station
   problem. `Program.cs` surfaces this with an explicit caveat in `status`
   output; don't take the literal string at face value when diagnosing.
-- **`activity: NOT_APPLICABLE` officially means "manual start required in
-  mower"** (per the developer portal text below, supplied by the user
-  2026-07-27) - corrects an earlier guess in this session that it was just
-  transient noise during motion-start moments. Real track-log evidence
-  (AM308V, 2026-07-27) shows it appearing for ~1 minute at a time between
-  `LEAVING`/`MOWING` polls with mowing resuming on its own right after, with
-  no sign of an actual physical button press - so the *literal* "needs a
-  human at the mower" meaning doesn't fully square with what's observed
-  either. Likely a brief placeholder value while the mower's own state
-  machine is mid-transition and hasn't settled on its next real activity
-  yet, rather than a genuine standing "come press the button" state every
-  time it appears - but that's inference, not confirmed. Treat the official
-  description as authoritative for what the *label* means, not as proof of
-  what's happening every single time it's observed for just one poll.
+- **`activity: NOT_APPLICABLE` is another ambiguous/overloaded label, same
+  pattern as `SEARCHING_FOR_SATELLITES` above.** The developer portal's own
+  text says it means "manual start required in mower" - but the user
+  confirmed no manual start happened around the real occurrence observed
+  (AM308V, 2026-07-27: ~1 minute at a time between `LEAVING`/`MOWING`
+  polls, mowing resuming on its own right after). The user's own leading
+  theory is a **temporary loss of communication** between the mower and
+  Husqvarna's cloud rather than an actual "needs a human" state - and per
+  the user, a Husqvarna support rep independently confirmed (in a separate
+  conversation) that some of these status messages are known to be
+  overloaded/reused for more than one underlying condition, not
+  documentation gaps specific to this project's own reverse-engineering.
+  **Don't take the official one-line description at face value for this
+  field** - it's a real, Husqvarna-documented label, but what it actually
+  indicates in practice isn't settled.
 - `capabilities.stayOutZones: true` only means the mower *supports* the
   feature — the `stayOutZones` attribute itself is `null` when no zones are
   configured (confirmed on all 3 of this account's mowers). When present, the
