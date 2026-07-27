@@ -43,6 +43,7 @@ public class LocationService(IHttpClientFactory httpClientFactory)
             var place = response?.Address?.Town ?? response?.Address?.Village
                 ?? response?.Address?.City ?? response?.Address?.Municipality
                 ?? response?.Address?.County;
+            place = TrimAdministrativeSuffix(place);
             var country = response?.Address?.Country;
             name = place is not null && country is not null ? $"{place}, {country}" : place ?? country;
         }
@@ -57,6 +58,30 @@ public class LocationService(IHttpClientFactory httpClientFactory)
 
         _cache[key] = name;
         return name;
+    }
+
+    // Nominatim's Municipality field (the fallback used when there's no
+    // Town/Village/City) bakes the country's own administrative-unit word
+    // straight into the name for some countries - e.g. "Piteå kommun"
+    // (Swedish) rather than just "Piteå". Trimmed for display; the
+    // dashboard just wants a place name, not an administrative-division
+    // label. Handles Norwegian "kommune" too, even though no real address
+    // on this account has hit that path yet - same reasoning, cheap to
+    // cover both since this account has mowers in both countries.
+    private static string? TrimAdministrativeSuffix(string? place)
+    {
+        if (place is null)
+        {
+            return null;
+        }
+        foreach (var suffix in (string[])[" kommun", " kommune"])
+        {
+            if (place.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                return place[..^suffix.Length];
+            }
+        }
+        return place;
     }
 
     private record NominatimResponse

@@ -60,7 +60,7 @@ else if (_cards.Count == 0 && _error is null)
                         <dd>@MowerDisplay.WeatherIcon(card.Weather) @card.Weather.TemperatureCelsius.ToString("F0")°C, @MowerDisplay.WeatherLabel(card.Weather.WeatherCode)</dd>
                     }
                     <dt>Mowed</dt>
-                    <dd>@MowerDisplay.MowingCell(card.TodayMowing)</dd>
+                    <dd>@MowerDisplay.MowingTotalCell(card.TodayMowing)</dd>
                     <dt>Charging</dt>
                     <dd>@MowerDisplay.DurationCell(card.TodayCharging)</dd>
                 </dl>

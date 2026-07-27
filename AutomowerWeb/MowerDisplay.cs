@@ -75,6 +75,17 @@ public static class MowerDisplay
 
     public static string DurationCell(TimeSpan span) => span > TimeSpan.Zero ? span.FormatDuration() : "—";
 
+    // Just the total, no per-work-area breakdown/brackets - unlike
+    // MowingCell above. Used for the dashboard top section's compact
+    // "Mowed" line, where a work area name (e.g. "[oversiden]") pushed
+    // that row onto a second line on some cards but not others, throwing
+    // off the Charging row/pie chart's vertical alignment across cards.
+    // MowingCell itself is unchanged and still used everywhere the
+    // per-area breakdown is actually wanted (the daily/monthly rollup
+    // tables, the "last 7 days" block).
+    public static string MowingTotalCell(List<WorkAreaTime> mowing)
+        => DurationCell(mowing.Aggregate(TimeSpan.Zero, (sum, m) => sum + m.Duration));
+
     // Shared by Dashboard (building each MowerCard) and MowerDetails
     // (rendering live MowerAttributes directly) so both resolve "which area
     // is it in" and "when's the next start" identically instead of two
