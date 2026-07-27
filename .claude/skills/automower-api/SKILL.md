@@ -743,6 +743,20 @@ Base URL: `https://api.amc.husqvarna.dev/v1`
   GPS/satellite search, lost WiFi/4G connectivity, or a charging station
   problem. `Program.cs` surfaces this with an explicit caveat in `status`
   output; don't take the literal string at face value when diagnosing.
+- **`activity: NOT_APPLICABLE` officially means "manual start required in
+  mower"** (per the developer portal text below, supplied by the user
+  2026-07-27) - corrects an earlier guess in this session that it was just
+  transient noise during motion-start moments. Real track-log evidence
+  (AM308V, 2026-07-27) shows it appearing for ~1 minute at a time between
+  `LEAVING`/`MOWING` polls with mowing resuming on its own right after, with
+  no sign of an actual physical button press - so the *literal* "needs a
+  human at the mower" meaning doesn't fully square with what's observed
+  either. Likely a brief placeholder value while the mower's own state
+  machine is mid-transition and hasn't settled on its next real activity
+  yet, rather than a genuine standing "come press the button" state every
+  time it appears - but that's inference, not confirmed. Treat the official
+  description as authoritative for what the *label* means, not as proof of
+  what's happening every single time it's observed for just one poll.
 - `capabilities.stayOutZones: true` only means the mower *supports* the
   feature — the `stayOutZones` attribute itself is `null` when no zones are
   configured (confirmed on all 3 of this account's mowers). When present, the
@@ -762,6 +776,54 @@ Base URL: `https://api.amc.husqvarna.dev/v1`
   `MowerActivityState` in `Models.cs`) is the field to resolve against
   `attributes.workAreas[]` for "what area is it actually in" — `status` now
   prints a resolved `Work area:` line from it instead of relying on `Mode`.
+
+## Official `mode`/`activity`/`state` descriptions (Husqvarna developer portal)
+
+The developer portal is a JS SPA that `WebFetch` can't render (see below) -
+the user pasted this text directly from the site 2026-07-27, so it's
+captured here verbatim as the authoritative source, superseding any
+aioautomower-derived or inferred descriptions for these three fields.
+
+**`mower.mode`**
+- `MAIN_AREA` - Mower will mow until low battery. Go home and charge. Leave
+  and continue mowing. Week schedule is used. Schedule can be overridden
+  with forced park or forced mowing.
+- `DEMO` - Same as main area, but shorter times. No blade operation.
+- `SECONDARY_AREA` - Mower is in secondary area. Schedule is overridden
+  with forced park or forced mowing. Mower will mow for requested time or
+  until the battery runs out.
+- `HOME` - Mower goes home and parks forever. Week schedule is not used.
+  Cannot be overridden with forced mowing.
+- `UNKNOWN` - Unknown mode.
+
+**`mower.activity`**
+- `UNKNOWN` - Unknown activity.
+- `NOT_APPLICABLE` - Manual start required in mower (see the Gotchas note
+  above - the literal meaning doesn't fully square with brief real-world
+  occurrences between other activities).
+- `MOWING` - Mower is mowing lawn. If in demo mode the blades are not in
+  operation.
+- `GOING_HOME` - Mower is going home to the charging station.
+- `CHARGING` - Mower is charging in station due to low battery.
+- `LEAVING` - Mower is leaving the charging station.
+- `PARKED_IN_CS` - Mower is parked in charging station.
+- `STOPPED_IN_GARDEN` - Mower has stopped. Needs manual action to resume.
+
+**`mower.state`** (not currently modeled with friendly descriptions
+anywhere - `status` just prints the raw value)
+- `UNKNOWN` - Unknown state.
+- `NOT_APPLICABLE` - (no description given by the source)
+- `PAUSED` - Mower has been paused by user.
+- `IN_OPERATION` - See value in `activity` for status.
+- `WAIT_UPDATING` - Mower is downloading new firmware.
+- `WAIT_POWER_UP` - Mower is performing power up tests.
+- `RESTRICTED` - Mower can currently not mow due to week calendar, or
+  override park - cross-reference `planner.restrictedReason`/
+  `ExternalReasons.Describe(planner.externalReason)` for *why*.
+- `OFF` - Mower is turned off.
+- `STOPPED` - Mower is stopped, requires manual action.
+- `ERROR`, `FATAL_ERROR`, `ERROR_AT_POWER_UP` - An error has occurred.
+  Check `errorCode`. Mower requires manual action.
 
 ## External references
 
