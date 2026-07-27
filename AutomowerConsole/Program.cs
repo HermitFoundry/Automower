@@ -674,9 +674,8 @@ void PrintUsage()
                                                  track-<mower>.jsonl: fast (default 60s, [seconds]
                                                  overrides) while active or in a scheduled window, else
                                                  every 5 min in daytime, else every 30 min at night
-                                                 (22:00-08:00) - all configurable via 'config'. While
-                                                 parked at the charger, only logs the arrival poll and
-                                                 the poll where battery reaches 100%, skipping the rest.
+                                                 (22:00-08:00) - all configurable via 'config'. Every
+                                                 poll is logged, including while parked at the charger.
           automower sessions [--calendar] [mower]
                                                  Summarize track-<mower>.jsonl into one line per
                                                  mowing/charging/etc. session (split on activity or

@@ -168,16 +168,43 @@ current.
 **Domain nuance surfaced by the user while reviewing real session data,
 worth remembering even though no code changed**: the API's `activity` label
 for "at the charger" is not a reliable signal for whether real charging
-happened. A session literally labeled `CHARGING` can show flat
-battery start%→end% (single-poll sessions are common here, since `track`
-only logs the arrival poll and skips repeats while still parked - see
-`RunAsync`'s skip logic), and a `PARKED_IN_CS` session with flat battery can
-still represent real charging time that only becomes visible via a
-much-higher battery% on the *next* session. After walking through this, the
-user's own conclusion was explicitly **not** to attempt battery-delta-based
-accuracy - keep `CHARGING`/`PARKED_IN_CS` summed as one combined "at the
-charger" total (`IsAtCharger`), as `AggregateDailyActivity` already did. If
-this comes up again, that conclusion was reached, not skipped.
+happened. A `PARKED_IN_CS` session with flat battery can still represent
+real charging time that only becomes visible via a much-higher battery% on
+the *next* session. After walking through this, the user's own conclusion
+was explicitly **not** to attempt battery-delta-based accuracy - keep
+`CHARGING`/`PARKED_IN_CS` summed as one combined "at the charger" total
+(`IsAtCharger`), as `AggregateDailyActivity` already did. If this comes up
+again, that conclusion was reached, not skipped.
+
+**`track` used to only log the arrival poll and skip repeats while still
+parked at the charger (changed 2026-07-27) - now every poll is logged,
+same as any other activity.** The old skip logic could leave a real gap:
+if the mower's own `activity` label flipped from `CHARGING` to
+`PARKED_IN_CS` on the same poll that crossed 100%, that poll started the
+*next* session instead of ending the charging one, leaving the charging
+session's `BatteryEnd` stuck at whatever it was on arrival - confirmed
+against a real case (2026-07-27, AM308V: a `Charging` session logged only
+`26%→26%` with a 1h43m gap before the next, unrelated `Parked` poll at
+`100%`). Logging every poll makes new gaps like that far less likely (the
+largest possible miss is now one poll interval, not up to ~30 minutes at
+night) but doesn't eliminate the label-flip-on-the-same-poll case entirely.
+`SummarizeSessions` now calls `TrackingService.BackfillChargingEndBattery`
+as a display-layer correction: when a charging-type session's `End` exactly
+equals the next at-charger session's `Start` (no gap) and that next
+session's `BatteryStart` is higher, the first session's `BatteryEnd` is
+backfilled from it. Doesn't touch `AggregateDailyActivity`/
+`AggregateMonthlyActivity` totals at all (those derive duration from
+`Start`/`End`/`ChargeCompleteAt`, never from `BatteryEnd`) - purely a
+session-list display fix, applies to both the CLI's `sessions` command and
+`AutomowerWeb`'s session table.
+
+The user explicitly decided against a "poll faster near 100%" optimization
+(diminishing value once the two fixes above are in) and separately flagged
+that `track-*.jsonl` log truncation/retention is worth doing eventually,
+but deferred - logging every poll now (rather than skipping most of the
+charger dwell time) makes these logs grow faster than before, so this is
+worth prioritizing sooner than "eventually" once file sizes become
+noticeable.
 
 **`am.cmd`/`am.sh` build once then launch `bin/Debug/net10.0/AutomowerConsole.dll`
 directly - deliberately not `dotnet run`.** Confirmed by direct incident on
@@ -361,16 +388,26 @@ response}` where `response` is the full raw mower payload. Built to answer
 "how much data would a day of polling actually be" empirically instead of
 estimating — a log file's size on disk *is* the answer, per mower.
 
-While the mower's `activity` is `CHARGING` or `PARKED_IN_CS` (see
-`IsAtCharger`), only two polls per charger stay are logged: the first poll
-after arrival, and (if it happens before the mower leaves again) the first
-poll where `batteryPercent` reaches 100 — everything else while still
-parked is skipped (console-only line), to avoid wasting log volume on an
-otherwise-unchanging state. The second point exists specifically so
-`sessions`'s grouping (same run of `activity`+`workAreaId`) gets a real
-`BatteryEnd` for a charger session instead of it just repeating
-`BatteryStart` — a stay that arrives already full only logs the one
-arrival poll (nothing left to detect).
+Every poll is logged, including while the mower's `activity` is `CHARGING`
+or `PARKED_IN_CS` (see `IsAtCharger`) - changed 2026-07-27; before that,
+only two polls per charger stay were logged (arrival, and the first poll
+where `batteryPercent` reached 100), skipping everything else to save log
+volume. That skip logic could leave a real gap in a charger session's own
+data: if the mower's own `activity` label flipped from `CHARGING` to
+`PARKED_IN_CS` on the exact poll that crossed 100%, that poll started the
+*next* session instead of ending this one, leaving `BatteryEnd` stuck at
+whatever it was on arrival - confirmed against a real case (2026-07-27,
+AM308V: a `Charging` session logged only `26%→26%` with a 1h43m gap before
+an unrelated `Parked` poll at `100%`). Logging every poll makes new gaps
+like that far less likely (the largest possible miss is now one poll
+interval instead of up to ~30 minutes at night) but doesn't eliminate the
+same-poll label-flip case entirely - see `TrackingService
+.BackfillChargingEndBattery`, a `SummarizeSessions`-level display
+correction that backfills a charging session's `BatteryEnd` from the next
+contiguous at-charger session's `BatteryStart` when they connect with no
+gap. Log volume grows faster now than under the old skip logic (a charger
+stay no longer collapses to ~1-2 lines) - `track-*.jsonl` truncation/
+retention is worth prioritizing sooner rather than later as a result.
 
 Interval is chosen fresh every poll, in this priority order (see
 `CommandTrack`, `IsWithinSchedule`, `IsNighttime`):
@@ -425,11 +462,11 @@ configured). Purely local file parsing via `Storage.GetTrackLogPath(mowerName)`
 mower) into a name, not to call the API.
 
 **Session end = the next differing poll's timestamp, not the session's own
-last poll.** This is deliberate and matters most for charger stays: since
-`track` logs only the arrival poll and skips repeats while parked (see
-above), a whole charging/parked session is frequently a single JSONL line -
-using its own timestamp as both start and end would show a nonsensical
-0-duration session. Using the next poll's timestamp instead (whatever
+last poll.** This is deliberate: a session's own last recorded poll is
+still mid-state (whatever changed hadn't happened yet), so using its own
+timestamp as both start and end would show a nonsensical 0-duration
+session even for a session with several polls in it. Using the next poll's
+timestamp instead (whatever
 activity/work area that turns out to be) is the earliest point the log can
 actually confirm the state changed, at the cost of some imprecision bounded
 by whatever interval was active at the time (up to `IdleIntervalSeconds` or

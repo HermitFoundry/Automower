@@ -12,8 +12,10 @@ namespace AutomowerConsole.Core;
 // callers (CLI or web) do their own presentation on top.
 public class TrackingService(ScheduleService schedule)
 {
-    // Activity values that mean "sitting at the charging station", as opposed to
-    // actually out in the garden. Used to suppress repeat polls while parked.
+    // Activity values that mean "sitting at the charging station", as opposed
+    // to actually out in the garden. Used to group charger-adjacent sessions
+    // (SummarizeSessions/BackfillChargingEndBattery) and to split charger
+    // time into Charging vs. Parked (AggregateActivity/SplitChargerSessions).
     public static bool IsAtCharger(string activity) => activity is "CHARGING" or "PARKED_IN_CS";
 
     public async Task RunAsync(string mowerId, string mowerName, Config config, int activeIntervalSeconds, CancellationToken cancellationToken)
@@ -26,20 +28,14 @@ public class TrackingService(ScheduleService schedule)
         Console.WriteLine($"Tracking {mowerName}. Logging to {logPath}. Press Ctrl+C to stop.");
         Console.WriteLine($"  Active/scheduled: every {activeIntervalSeconds}s   Idle (daytime): every {config.IdleIntervalSeconds}s   " +
                            $"Night ({config.NightStartHour:00}:00-{config.NightEndHour:00}:00): every {config.NightIntervalSeconds}s");
-        Console.WriteLine("While parked at the charging station, only the first poll after arrival and the poll where battery reaches 100% are logged.");
         Console.WriteLine("The mower's schedule is refreshed from schedule.json's cache each poll (no extra API cost) - run 'schedule' to force an update.");
 
         // Seed with whatever's cached so the very first wait (before any poll)
         // already has something to work with; refreshed for real after each poll.
         var tasks = schedule.GetCachedTasks(mowerId);
 
-        string? lastActivity = null;
         var recordCount = 0;
         long totalBytes = 0;
-        // Reset whenever a new charger stay begins; tracks whether this stay's
-        // "reached 100%" record has already been written, so a stay that sits
-        // at 100% for hours doesn't re-log every single poll.
-        var loggedFullChargeThisStay = false;
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -53,7 +49,6 @@ public class TrackingService(ScheduleService schedule)
                 using var doc = JsonDocument.Parse(raw);
                 var attributes = doc.RootElement.GetProperty("data").GetProperty("attributes");
                 var activity = attributes.GetProperty("mower").GetProperty("activity").GetString() ?? "";
-                var battery = attributes.GetProperty("battery").GetProperty("batteryPercent").GetInt32();
 
                 // The mower payload already carries the schedule - update the
                 // cache from it for free instead of a separate daily fetch.
@@ -62,47 +57,42 @@ public class TrackingService(ScheduleService schedule)
                     : [];
                 schedule.SaveScheduleForMower(mowerId, mowerName, tasks);
 
-                var atCharger = IsAtCharger(activity);
-                var wasAtCharger = lastActivity is not null && IsAtCharger(lastActivity);
                 (nextIntervalSeconds, var reason) = schedule.DetermineTrackingInterval(tasks, activity, activeIntervalSeconds, timestamp, config);
 
-                if (atCharger && !wasAtCharger)
+                // Every poll gets logged now, including repeat polls while
+                // still sitting at the charger - previously those were
+                // suppressed (only the arrival poll and the poll where
+                // battery first hit 100% were kept), which could leave a
+                // charging session with a multi-hour gap and no record of
+                // when it actually finished, if the mower's own activity
+                // label happened to flip from CHARGING to PARKED_IN_CS on
+                // the same poll that crossed 100% - the 100% poll then
+                // starts the *next* session instead of ending this one,
+                // leaving BatteryEnd stuck at whatever it was on arrival
+                // (confirmed against a real gap: 2026-07-27, AM308V, a
+                // Charging session logged only 26%->26% with a 1h43m gap
+                // before the next, unrelated Parked poll at 100%).
+                // SummarizeSessions' BackfillChargingEndBattery covers the
+                // history already collected under the old suppressed
+                // scheme; logging every poll going forward makes new gaps
+                // like that one far less likely in the first place (the
+                // largest possible miss is one poll interval, not up to
+                // ~30 minutes at night).
+                var byteCount = Encoding.UTF8.GetByteCount(raw);
+                var record = new
                 {
-                    // Just arrived - this stay's "reached 100%" record hasn't
-                    // happened yet, unless it rolled in already full.
-                    loggedFullChargeThisStay = battery == 100;
-                }
-                var reachedFullCharge = atCharger && wasAtCharger && battery == 100 && !loggedFullChargeThisStay;
-                if (reachedFullCharge)
-                {
-                    loggedFullChargeThisStay = true;
-                }
+                    timestamp,
+                    mowerId,
+                    mowerName,
+                    bytes = byteCount,
+                    response = doc.RootElement,
+                };
+                await File.AppendAllTextAsync(logPath, JsonSerializer.Serialize(record) + Environment.NewLine, cancellationToken);
 
-                if (!(atCharger && wasAtCharger) || reachedFullCharge)
-                {
-                    var byteCount = Encoding.UTF8.GetByteCount(raw);
-                    var record = new
-                    {
-                        timestamp,
-                        mowerId,
-                        mowerName,
-                        bytes = byteCount,
-                        response = doc.RootElement,
-                    };
-                    await File.AppendAllTextAsync(logPath, JsonSerializer.Serialize(record) + Environment.NewLine, cancellationToken);
-
-                    recordCount++;
-                    totalBytes += byteCount;
-                    var note = reachedFullCharge ? ", reached 100%" : "";
-                    Console.WriteLine($"[{timestamp:yyyy-MM-dd HH:mm:ss}] logged (activity: {activity}{note}, {byteCount} bytes, next check in {nextIntervalSeconds}s - {reason}) - " +
-                                       $"{recordCount} records, {totalBytes / 1024.0:F1} KB this session");
-                }
-                else
-                {
-                    Console.WriteLine($"[{timestamp:yyyy-MM-dd HH:mm:ss}] skipped (still at charger, next check in {nextIntervalSeconds}s - {reason})");
-                }
-
-                lastActivity = activity;
+                recordCount++;
+                totalBytes += byteCount;
+                Console.WriteLine($"[{timestamp:yyyy-MM-dd HH:mm:ss}] logged (activity: {activity}, {byteCount} bytes, next check in {nextIntervalSeconds}s - {reason}) - " +
+                                   $"{recordCount} records, {totalBytes / 1024.0:F1} KB this session");
             }
             catch (OperationCanceledException)
             {
@@ -255,6 +245,7 @@ public class TrackingService(ScheduleService schedule)
             i = j + 1;
         }
 
+        sessions = BackfillChargingEndBattery(sessions);
         sessions.Reverse();
 
         if (skipped > 0)
@@ -263,6 +254,44 @@ public class TrackingService(ScheduleService schedule)
         }
 
         return sessions;
+    }
+
+    // Pure: corrects a Charging/Parked session's own BatteryEnd when it's
+    // stuck below what the *next* contiguous at-charger session started at.
+    // Happens when the mower's own activity label flips (e.g. CHARGING ->
+    // PARKED_IN_CS) on the very same poll that crosses 100% - that poll
+    // starts a *new* session instead of ending this one, so this session's
+    // last known point can be well below 100% even though it's known (from
+    // what immediately follows, with no gap) to have actually finished
+    // charging. Confirmed against a real case: 2026-07-27, AM308V, a
+    // Charging session logged only 26%->26% with a 1h43m gap before the
+    // next, unrelated Parked poll at 100% (see RunAsync, which now logs
+    // every poll instead of suppressing repeats at the charger, making new
+    // gaps like that one far less likely - this backfill mainly matters for
+    // history collected before that change, though the label-flip-on-the-
+    // same-poll case can still happen even with dense polling).
+    //
+    // Only applies across a genuine contiguous boundary (this session's End
+    // equals the next session's Start exactly - no gap) between two
+    // at-charger sessions, and only when the next one's BatteryStart is
+    // actually higher - so it never invents a value, only recovers one
+    // that's already known from what comes immediately after. Expects
+    // chronological (oldest-first) input, same as the caller's own
+    // ordering before it reverses to newest-first.
+    public static List<TrackSession> BackfillChargingEndBattery(List<TrackSession> chronological)
+    {
+        var result = new List<TrackSession>(chronological);
+        for (var idx = 0; idx < result.Count - 1; idx++)
+        {
+            var current = result[idx];
+            var next = result[idx + 1];
+            if (IsAtCharger(current.Activity) && IsAtCharger(next.Activity) &&
+                current.End == next.Start && next.BatteryStart > current.BatteryEnd)
+            {
+                result[idx] = current with { BatteryEnd = next.BatteryStart };
+            }
+        }
+        return result;
     }
 
     // Pure: expands a charger session that has a ChargeCompleteAt into two -

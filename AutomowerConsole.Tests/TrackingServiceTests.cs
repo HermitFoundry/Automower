@@ -306,6 +306,73 @@ public class TrackingServiceAggregateDailyActivityTests
     }
 
     [Test]
+    public void BackfillChargingEndBatteryFixesTheRealAM308VGapCase()
+    {
+        // Reproduces the real 2026-07-27 AM308V case: a Charging session
+        // logged only its arrival point (26%->26%, no interim poll caught
+        // the actual charge-to value), immediately followed - no gap - by a
+        // Parked session that starts at 100%. The Charging session's own
+        // BatteryEnd should be corrected to 100.
+        DateTimeOffset T(int hour, int minute) => new(2026, 7, 27, hour, minute, 0, TimeSpan.FromHours(2));
+
+        var charging = new TrackSession(T(12, 37), T(14, 20), "CHARGING", 26, 26, "hovedomrade", null, null, null);
+        var parked = new TrackSession(T(14, 20), null, "PARKED_IN_CS", 100, 100, null, null, null, null);
+
+        var result = TrackingService.BackfillChargingEndBattery([charging, parked]);
+
+        Assert.That(result[0].BatteryEnd, Is.EqualTo(100), "Charging's end battery should be backfilled from the contiguous Parked session's start");
+        Assert.That(result[1], Is.EqualTo(parked), "the following session itself should be untouched");
+    }
+
+    [Test]
+    public void BackfillChargingEndBatteryLeavesACleanHandoffUnchanged()
+    {
+        // The working case (case 2 from the same real history): the mower
+        // was still reporting CHARGING right through reaching 100%, so
+        // BatteryEnd is already correct - nothing to backfill.
+        DateTimeOffset T(int hour, int minute) => new(2026, 7, 26, hour, minute, 0, TimeSpan.FromHours(2));
+
+        var charging = new TrackSession(T(14, 7), T(14, 47), "CHARGING", 65, 100, null, null, null, null);
+        var parked = new TrackSession(T(14, 47), null, "PARKED_IN_CS", 100, 100, null, null, null, null);
+
+        var result = TrackingService.BackfillChargingEndBattery([charging, parked]);
+
+        Assert.That(result, Is.EqualTo([charging, parked]));
+    }
+
+    [Test]
+    public void BackfillChargingEndBatteryDoesNotBridgeAGap()
+    {
+        // Same batteries as the real gap case, but End != next.Start (a real
+        // gap between sessions, e.g. a tracking outage) - not something this
+        // can safely attribute to "still at the charger the whole time", so
+        // it must be left alone.
+        DateTimeOffset T(int day, int hour, int minute) => new(2026, 7, day, hour, minute, 0, TimeSpan.FromHours(2));
+
+        var charging = new TrackSession(T(27, 12, 37), T(27, 14, 20), "CHARGING", 26, 26, null, null, null, null);
+        var parkedLater = new TrackSession(T(27, 15, 0), null, "PARKED_IN_CS", 100, 100, null, null, null, null);
+
+        var result = TrackingService.BackfillChargingEndBattery([charging, parkedLater]);
+
+        Assert.That(result[0].BatteryEnd, Is.EqualTo(26), "no contiguous boundary to justify backfilling across a real gap");
+    }
+
+    [Test]
+    public void BackfillChargingEndBatteryIgnoresNonChargerNeighbors()
+    {
+        // The next session isn't at-charger at all (e.g. it left again
+        // immediately) - nothing to backfill from.
+        DateTimeOffset T(int hour, int minute) => new(2026, 7, 27, hour, minute, 0, TimeSpan.FromHours(2));
+
+        var charging = new TrackSession(T(12, 37), T(14, 20), "CHARGING", 26, 26, null, null, null, null);
+        var leaving = new TrackSession(T(14, 20), T(14, 22), "LEAVING", 26, 26, null, null, null, null);
+
+        var result = TrackingService.BackfillChargingEndBattery([charging, leaving]);
+
+        Assert.That(result[0].BatteryEnd, Is.EqualTo(26));
+    }
+
+    [Test]
     public void SplitChargerSessionsSplitsAStillOngoingSessionUsingNowAsTheImplicitEnd()
     {
         // A real currently-ongoing stay (End is null) that reached 100% a
