@@ -1,12 +1,19 @@
-// Source: Husqvarna Automower Connect API error codes, as documented by the
-// aioautomower project (https://github.com/Thomas55555/aioautomower).
+// Source: the Husqvarna developer portal's own "Error codes" reference text
+// (pasted directly by the user, 2026-07-27 - the portal itself is a JS SPA
+// WebFetch can't render), reconciled against what this table previously had
+// from the aioautomower project (https://github.com/Thomas55555/aioautomower).
+// Only two real factual differences turned up (code 0 and code 62 below) -
+// everything else matched in meaning, sometimes with different phrasing/
+// typos in the portal's raw text (e.g. "High internal temerature" for 121,
+// "Blutooth" for 157) that weren't worth propagating over already-correct
+// wording here.
 namespace AutomowerConsole.Core;
 
 public static class ErrorCodes
 {
     public static readonly IReadOnlyDictionary<int, string> Descriptions = new Dictionary<int, string>
     {
-        [0] = "Unexpected error",
+        [0] = "No message",
         [1] = "Outside working area",
         [2] = "No loop signal",
         [3] = "Wrong loop signal",
@@ -68,7 +75,7 @@ public static class ErrorCodes
         [59] = "Temporary battery problem",
         [60] = "Temporary battery problem",
         [61] = "Temporary battery problem",
-        [62] = "Battery restriction due to ambient temperature",
+        [62] = "Temporary battery problem",
         [63] = "Temporary battery problem",
         [64] = "Temporary battery problem",
         [65] = "Temporary battery problem",

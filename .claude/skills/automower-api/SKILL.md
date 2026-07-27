@@ -726,6 +726,19 @@ Base URL: `https://api.amc.husqvarna.dev/v1`
   `planner.nextStartTimestamp`, and `workAreas[].lastTimeAbandoned` are epoch
   **milliseconds**. Verified by cross-checking against the real clock — don't
   assume, check which field you're converting.
+- **`mower.errorCodeTimestamp` (not currently modeled in `Models.cs` - not
+  yet asked for) is a third, worse timestamp trap**: per the developer
+  portal's own text, it's epoch milliseconds like the others above, but
+  **in the mower's own local time, not UTC** - the raw number already
+  represents local wall-clock time as if it were UTC. Converting it the
+  normal way (`DateTimeOffset.FromUnixTimeMilliseconds(...).ToLocalTime()`,
+  the pattern used everywhere else in this codebase) would silently apply a
+  *second* timezone shift on top of one that's already baked in, producing
+  a wrong time offset by however many hours the local zone differs from
+  UTC. If this field is ever modeled, it needs its own conversion path -
+  treat the raw number as already-local (e.g.
+  `DateTime.UnixEpoch.AddMilliseconds(raw)`, no `ToLocalTime()`), not the
+  same helper used for every other timestamp in this API.
 - `mower.errorCode` and `messages[].code` are bare integers (not strings) that
   index into the same error code table — see `ErrorCodes.cs`.
 - `attributes.positions[]` (only visible via `status --all`, not modeled in
