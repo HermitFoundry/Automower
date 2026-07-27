@@ -851,10 +851,13 @@ anywhere - `status` just prints the raw value)
   - OpenAPI tab (the reference the user pointed at directly; same SPA
     problem, likely renders the spec client-side):
     https://developer.husqvarnagroup.cloud/apis/automower-connect-api?tab=openapi
-  - "Status description and error codes" tab (would be the authoritative
-    error-code source if it can ever be scraped — same SPA problem, worth
-    retrying if browser tooling becomes available):
-    https://developer.husqvarnagroup.cloud/apis/automower-connect-api?tab=status+description+and+error+codes
+  - "Status description and error codes" tab - the authoritative source for
+    `mode`/`activity`/`state` descriptions and the error code table above
+    (both sections in this file). Same SPA problem for automated fetching,
+    but the user pasted its content directly (2026-07-27), so it's already
+    captured here - no need to re-fetch unless double-checking against a
+    future portal update:
+    https://developer.husqvarnagroup.cloud/apis/automower-connect-api?tab=status%20description%20and%20error%20codes
 - **aioautomower** (Python, MIT, used by the Home Assistant Husqvarna
   integration) — source of the error code table and the stay-out-zones model,
   cross-checked against this account's real message history and found
