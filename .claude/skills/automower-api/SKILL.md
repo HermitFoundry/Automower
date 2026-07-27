@@ -839,6 +839,67 @@ anywhere - `status` just prints the raw value)
 - `ERROR`, `FATAL_ERROR`, `ERROR_AT_POWER_UP` - An error has occurred.
   Check `errorCode`. Mower requires manual action.
 
+## WebSocket / event-push API - not yet implemented, confirmed usable
+
+The developer portal has a WebSocket API (`?tab=websocket` /
+`?tab=websocket%20api` tabs - same JS SPA problem, `WebFetch` only returns
+the page title). User asked (2026-07-27) whether this could replace `track`'s
+interval polling later - confirmed genuinely usable, real connection details
+below sourced from **aioautomower's actual implementation**
+(`session.py`/`auth.py`/`const.py`, not just its docs - this is real,
+working client code used by the Home Assistant integration, not
+speculation). Deliberately not implemented yet - "a bit tricky," per the
+user, worth having confirmed for whenever it's picked up.
+
+- **Endpoint**: `wss://ws.openapi.husqvarna.dev/v1`
+- **Auth**: the *same* OAuth2 client-credentials bearer token already used
+  for REST (see `HusqvarnaClient.cs`) - sent as an `Authorization: Bearer
+  <token>` header on the WebSocket handshake itself, not a query param. No
+  new credential or flow needed, and no separate per-mower subscribe
+  message either - connecting just starts delivering events for every
+  mower on the account.
+- **Handshake**: first message received is `{"ready": true, "connectionId":
+  "..."}`, not an event - confirms the connection is live.
+- **Event shape - a delta model, not full snapshots**: every subsequent
+  message is `{"id": "<mowerId>", "type": "<event-type>", "attributes":
+  {...partial...}}`. A client needs one REST baseline first (already have
+  this via `GetMowerAsync`), then merge each event's partial `attributes`
+  into its own cached copy - aioautomower does this with a recursive
+  dict-merge (`_update_nested_dict`) keyed by which event `type` arrived.
+  Eight event types observed (`EventTypesV2` in `const.py`):
+  `mower-event-v2`, `battery-event-v2`, `calendar-event-v2`,
+  `planner-event-v2`, `position-event-v2`, `cuttingHeight-event-v2`,
+  `headlights-event-v2`, `message-event-v2`.
+- **Connection lifecycle - the "tricky" part**: no real server ping/pong -
+  aiohttp's client-side heartbeat (60s) keeps the TCP connection alive, and
+  an empty-data message from the server doubles as an alive signal.
+  aioautomower **proactively reconnects every ~7195 seconds (~2 hours)
+  regardless of errors** (`_reconnect_scheduler`), strongly suggesting the
+  server enforces a connection lifetime rather than this being an arbitrary
+  client choice - plus reactively on 5 minutes of receive silence
+  (`ws.receive(timeout=300)`) or any `ClientError`. Reconnects use a
+  "make-before-break" pattern: open the new connection before tearing down
+  the old one, so there's no gap in event coverage during a routine
+  reconnect.
+- **Why it'd genuinely help this project**: it would sidestep the entire
+  class of bug fixed 2026-07-27 (missing the exact moment a charging
+  session crosses 100% because a poll happened to land on the wrong side
+  of an activity-label flip) - `battery-event-v2` and `mower-event-v2`
+  would arrive as two distinct, precisely-timed real-time pushes instead
+  of being inferred from periodic snapshots. `track` could stay idle and
+  just log whenever a real event actually arrives, rather than polling on
+  a fixed/adaptive interval at all.
+- **Open unknown, not answered by anything available here**: no documented
+  connection/rate limits (e.g. one websocket per app key vs. per account,
+  or whether opening one while `track`'s existing REST polling also runs
+  would conflict). Would need empirical testing before committing to this,
+  not just reading the reference client's source.
+- `AutomowerSession` also supports an optional REST-poll fallback mode
+  (`poll=True`, `REST_POLL_CYCLE = 300` seconds) *alongside* the websocket
+  - not an either/or in aioautomower's own design, worth keeping in mind if
+  this ever gets built (e.g. an initial REST poll to catch up after a
+  reconnect, then rely on push events between polls).
+
 ## External references
 
 - Husqvarna Authentication API (token endpoint):
@@ -858,6 +919,12 @@ anywhere - `status` just prints the raw value)
     captured here - no need to re-fetch unless double-checking against a
     future portal update:
     https://developer.husqvarnagroup.cloud/apis/automower-connect-api?tab=status%20description%20and%20error%20codes
+  - WebSocket tabs (the user's pointer for the "WebSocket / event-push API"
+    section above; same SPA problem, not yet captured verbatim the way the
+    error-codes tab was - ground truth for that section came from
+    aioautomower's actual client code instead, linked below):
+    https://developer.husqvarnagroup.cloud/apis/automower-connect-api?tab=websocket
+    https://developer.husqvarnagroup.cloud/apis/automower-connect-api?tab=websocket%20api
 - **aioautomower** (Python, MIT, used by the Home Assistant Husqvarna
   integration) — source of the error code table and the stay-out-zones model,
   cross-checked against this account's real message history and found
@@ -872,6 +939,16 @@ anywhere - `status` just prints the raw value)
     fetch and mower-list parsing; useful if this project grows into a fuller
     client (e.g. commands like start/stop/park):
     https://github.com/Thomas55555/aioautomower/blob/main/src/aioautomower/utils.py
+  - `session.py` — the actual WebSocket client (connect/listen/reconnect
+    lifecycle, event dispatch, delta-merge into cached state) - source for
+    the "WebSocket / event-push API" section above:
+    https://github.com/Thomas55555/aioautomower/blob/main/src/aioautomower/session.py
+  - `auth.py` — the WebSocket handshake itself (`websocket_connect`), and
+    confirms the same bearer token used for REST is reused as-is:
+    https://github.com/Thomas55555/aioautomower/blob/main/src/aioautomower/auth.py
+  - `const.py` — `WS_URL`, `EventTypesV2` (the 8 real event type strings),
+    `REST_POLL_CYCLE`:
+    https://github.com/Thomas55555/aioautomower/blob/main/src/aioautomower/const.py
 - Gist with a partial (0-90) error code list, used before finding the fuller
   aioautomower source — superseded, kept here only for provenance:
   https://gist.github.com/nissicreative/277c80a23e83b5de923aadab050c186f
