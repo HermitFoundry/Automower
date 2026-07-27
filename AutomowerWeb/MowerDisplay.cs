@@ -109,6 +109,18 @@ public static class MowerDisplay
         _ => action,
     };
 
+    // Null (not just "None") when there's nothing to show, so callers can
+    // hide the whole row instead of rendering a permanent "Restricted: None".
+    public static string? RestrictedLabel(string restrictedReason, int? externalReason)
+    {
+        if (restrictedReason is "" or "NOT_APPLICABLE")
+        {
+            return null;
+        }
+        var externalLabel = ExternalReasons.Describe(externalReason);
+        return externalLabel is null ? restrictedReason : $"{restrictedReason} - {externalLabel}";
+    }
+
     public static string HeadlightModeLabel(string? mode) => mode switch
     {
         null or "" => "—",

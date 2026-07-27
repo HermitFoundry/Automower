@@ -378,6 +378,12 @@ public record PlannerInfo
 
     [JsonPropertyName("override")]
     public PlannerOverride? Override { get; init; }
+
+    // Only present when RestrictedReason is "EXTERNAL" - a numeric code
+    // identifying *what* external thing is holding the mower back (a smart
+    // routine, a voice assistant, IFTTT, ...). See ExternalReasons.Describe.
+    [JsonPropertyName("externalReason")]
+    public int? ExternalReason { get; init; }
 }
 
 public record PlannerOverride

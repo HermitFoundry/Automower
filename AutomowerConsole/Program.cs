@@ -238,6 +238,16 @@ async Task CommandStatus(string[] statusArgs)
     {
         Console.WriteLine($"  Error code: {a.Mower.ErrorCode} ({ErrorCodes.Describe(a.Mower.ErrorCode)})");
     }
+    if (a.Planner.RestrictedReason is not ("NOT_APPLICABLE" or ""))
+    {
+        var reasonLabel = a.Planner.RestrictedReason;
+        var externalLabel = ExternalReasons.Describe(a.Planner.ExternalReason);
+        if (externalLabel is not null)
+        {
+            reasonLabel += $" - {externalLabel}";
+        }
+        Console.WriteLine($"  Restricted: {reasonLabel}");
+    }
 }
 
 // The API reports "SEARCHING_FOR_SATELLITES" as a catch-all inactive reason -
@@ -502,7 +512,13 @@ async Task CommandSchedule(string[] scheduleArgs)
     Console.WriteLine($"  Next planned start:  {nextPlanned} (the mower's live decision - may differ, e.g. due to battery)");
     if (mower.Attributes.Planner.RestrictedReason is not ("NOT_APPLICABLE" or ""))
     {
-        Console.WriteLine($"  Restricted: {mower.Attributes.Planner.RestrictedReason}");
+        var reasonLabel = mower.Attributes.Planner.RestrictedReason;
+        var externalLabel = ExternalReasons.Describe(mower.Attributes.Planner.ExternalReason);
+        if (externalLabel is not null)
+        {
+            reasonLabel += $" - {externalLabel}";
+        }
+        Console.WriteLine($"  Restricted: {reasonLabel}");
     }
 }
 

@@ -45,6 +45,12 @@ else if (_detail is not null && _stored is not null)
         <dd>@MowerDisplay.NextStartLabel(a)</dd>
         <dt>Override</dt>
         <dd>@MowerDisplay.OverrideLabel(a.Planner.Override?.Action)</dd>
+        @{ var restricted = MowerDisplay.RestrictedLabel(a.Planner.RestrictedReason, a.Planner.ExternalReason); }
+        @if (restricted is not null)
+        {
+            <dt>Restricted</dt>
+            <dd>@restricted</dd>
+        }
         <dt>Model</dt>
         <dd>@_stored.Model</dd>
         <dt>Serial number</dt>
