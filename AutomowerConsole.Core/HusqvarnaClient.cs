@@ -10,6 +10,11 @@ internal class HusqvarnaClient(HttpClient http, string appKey, string appSecret)
 
     private string? _accessToken;
 
+    // Exposed for EventTrackingService's WebSocket handshake, which needs
+    // the raw bearer token string directly (a WebSocket connection has no
+    // HttpClient/Authorization-header pipeline of its own to reuse).
+    public string? AccessToken => _accessToken;
+
     public async Task AuthenticateAsync()
     {
         var form = new FormUrlEncodedContent(new Dictionary<string, string>

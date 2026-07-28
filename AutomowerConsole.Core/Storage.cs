@@ -33,6 +33,12 @@ public static class Storage
     public static string GetTrackLogPath(string mowerName)
         => Path.Combine(DataDir, $"track-{SanitizeForFileName(mowerName)}.jsonl");
 
+    // Separate from GetTrackLogPath's own file - the WebSocket event log
+    // (EventTrackingService) is a distinct experiment, not another data
+    // source feeding the same 'sessions'/'daily' summarization as 'track'.
+    public static string GetEventLogPath(string mowerName)
+        => Path.Combine(DataDir, $"events-{SanitizeForFileName(mowerName)}.jsonl");
+
     private static string SanitizeForFileName(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();

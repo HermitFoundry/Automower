@@ -22,6 +22,7 @@ var mowerService = new MowerService();
 var mowerDetailService = new MowerDetailService();
 var scheduleService = new ScheduleService();
 var trackingService = new TrackingService(scheduleService);
+var eventTrackingService = new EventTrackingService();
 
 switch (command)
 {
@@ -54,6 +55,9 @@ switch (command)
         break;
     case "track":
         await CommandTrack(rest);
+        break;
+    case "eventtracking":
+        await CommandEventTracking(rest);
         break;
     case "config":
         CommandConfig(rest);
@@ -471,6 +475,22 @@ async Task CommandTrack(string[] trackArgs)
     await trackingService.RunAsync(mowerId, mowerName, config, activeIntervalSeconds, cts.Token);
 }
 
+async Task CommandEventTracking(string[] eventArgs)
+{
+    var resolved = await mowerService.ResolveMowerAsync(eventArgs.FirstOrDefault());
+    if (resolved is null) return;
+    var (mowerId, mowerName) = resolved.Value;
+
+    using var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        cts.Cancel();
+    };
+
+    await eventTrackingService.RunAsync(mowerId, mowerName, cts.Token);
+}
+
 async Task CommandSchedule(string[] scheduleArgs)
 {
     var resolved = await mowerService.ResolveMowerAsync(scheduleArgs.FirstOrDefault());
@@ -692,6 +712,10 @@ void PrintUsage()
                                                  every 5 min in daytime, else every 30 min at night
                                                  (22:00-08:00) - all configurable via 'config'. Every
                                                  poll is logged, including while parked at the charger.
+          automower eventtracking [mower]       Experimental: connects to Husqvarna's WebSocket
+                                                 event-push API and logs every event received for one
+                                                 mower to events-<mower>.jsonl, instead of polling.
+                                                 Reconnects automatically. Ctrl+C to stop.
           automower sessions [--calendar] [mower]
                                                  Summarize track-<mower>.jsonl into one line per
                                                  mowing/charging/etc. session (split on activity or

@@ -86,4 +86,19 @@ internal class AutomowerConnect(string appKey, string appSecret)
         => WithAuthAsync(() => _client.GetWorkAreaAsync(mowerId, workAreaId));
 
     public Task<MessageItem[]> GetMessagesAsync(string mowerId) => WithAuthAsync(() => _client.GetMessagesAsync(mowerId));
+
+    // For EventTrackingService's WebSocket handshake - always fetches a
+    // genuinely fresh token rather than reusing whatever this process
+    // cached earlier. A WebSocket connection can stay open for hours, and
+    // this process's own cached REST token (see AuthenticateAsync) is only
+    // ever proactively refreshed by a failed REST call - a WebSocket
+    // reconnect never makes one, so it would never notice an expired
+    // token on its own. Simpler to just always ask for a new one on every
+    // (re)connect than to track token expiry separately.
+    public async Task<string> GetFreshAccessTokenAsync()
+    {
+        await AuthenticateWithRetryAsync();
+        _authenticated = true;
+        return _client.AccessToken ?? throw new InvalidOperationException("Authenticated but no access token available.");
+    }
 }
