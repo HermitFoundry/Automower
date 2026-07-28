@@ -176,6 +176,18 @@ was explicitly **not** to attempt battery-delta-based accuracy - keep
 (`IsAtCharger`), as `AggregateDailyActivity` already did. If this comes up
 again, that conclusion was reached, not skipped.
 
+**A parked mower's battery can quietly drain a bit rather than being kept
+topped up continuously** - confirmed 2026-07-28 via the WebSocket event
+log (AM308V): sitting `PARKED_IN_CS`, battery ticked 96%→97% (a real
+`battery-event-v2`), then a `FORCE_MOW` command arrived and it briefly
+reported `activity: CHARGING` for under a second before `LEAVING` - and
+separately, the user independently saw the same "charging 97%, then
+moving seconds later" behavior live in the Husqvarna app around the same
+moment. Two independent observations of the same thing - a real mower/app
+behavior (small drain-then-brief-top-up cycling while docked, not
+continuous trickle charging), not an artifact of the new event-tracking
+code. Not investigated further, just confirmed real.
+
 **`track` used to only log the arrival poll and skip repeats while still
 parked at the charger (changed 2026-07-27) - now every poll is logged,
 same as any other activity.** The old skip logic could leave a real gap:
