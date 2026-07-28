@@ -59,6 +59,9 @@ h1:focus {
        These exist only for MowerDisplay.BuildDayPieSlices' wedges. */
     --chart-mowing: #22c55e;
     --chart-charging: #6366f1;
+    /* Lighter than --idle, deliberately - the indigo charging wedge still
+       didn't read clearly against --idle's darker blue-grey, per the user. */
+    --chart-idle: #b0bac2;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -231,7 +234,7 @@ a { color: var(--brand); }
    deliberately only emits wedges for Mowing/Charging, leaving this to show
    through everywhere else instead of drawing separate grey wedges over it. */
 .day-chart-bg {
-    fill: var(--idle);
+    fill: var(--chart-idle);
     stroke: var(--border);
     stroke-width: 2;
 }
