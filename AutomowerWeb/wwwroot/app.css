@@ -50,6 +50,15 @@ h1:focus {
     --charging: #1565c0;
     --idle: #546e7a;
     --error: #c62828;
+    /* Deliberately vivid and theme-invariant (same value in both light and
+       dark mode, unlike --mowing/--charging above) - those are tuned as
+       subtle accents (card border, dt labels) against their own theme's
+       background, but the day-chart's grey background (--idle) sits
+       between the two, and muted green/blue didn't read clearly against
+       it (confirmed by the user against a real dark-mode screenshot).
+       These exist only for MowerDisplay.BuildDayPieSlices' wedges. */
+    --chart-mowing: #22c55e;
+    --chart-charging: #6366f1;
 }
 
 @media (prefers-color-scheme: dark) {

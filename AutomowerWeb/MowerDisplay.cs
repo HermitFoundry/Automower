@@ -255,7 +255,11 @@ public static class MowerDisplay
             // angle, it means the segment crossed noon and needs a full
             // lap added to keep sweeping forward instead of backward.
             var endAngle = endAngleRaw < startAngle ? endAngleRaw + 360 : endAngleRaw;
-            var colorVar = s.Activity == "MOWING" ? "var(--mowing)" : "var(--charging)";
+            // Dedicated --chart-* colors, not the app-wide --mowing/--charging
+            // tokens used elsewhere (card border accents, dt labels) - those
+            // are muted, theme-tuned accents that didn't read clearly
+            // against this chart's own grey background (see app.css).
+            var colorVar = s.Activity == "MOWING" ? "var(--chart-mowing)" : "var(--chart-charging)";
             var title = $"{Label(s.Activity)} {segStart:HH:mm}–{segEnd:HH:mm}";
             slices.Add(new PieSlice(PieSlicePath(startAngle, endAngle), colorVar, title));
         }
