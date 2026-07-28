@@ -1017,6 +1017,22 @@ findings above:
   20:17:45 → 95, 90, 85, 80, 75, 72, 70% by 21:10:46) - a real ~0.8%/min
   drain rate, and `battery-event-v2` is clearly not limited to charger
   transitions.
+- **Charging also produces regular intermediate events, not just a
+  start/end pair** - confirmed from the same real charge: 67% (21:18:31,
+  just arrived) → 72% → 77% → 82%, roughly every 2.5-4.5 minutes per 5%.
+  This looked inconsistent at first against two earlier instances in the
+  same session that jumped straight from 96-97% to 100% with nothing in
+  between (19:58→20:04:57, 20:17:27→20:17:45) - the user's leading theory,
+  fitting all the evidence without needing to assume events get skipped:
+  a small dip (1-4%, quick natural drain while just sitting there)
+  recovers fast enough that a periodic check-in might simply never land
+  mid-recovery, while a large deficit (like this 30%+ one, from a real
+  long mow) takes long enough that several check-ins catch it partway.
+  Not yet confirmed against the other two mowers - this account's
+  `eventtracking` experiment has only ever run against the AM308V so far;
+  worth checking whether the same fast-recovery-from-small-drain pattern
+  holds next time either of the other two goes through a real charge
+  cycle while being watched.
 - **Two more event types observed for the first time -
   `message-event-v2` and `calendar-event-v2` - and both reinforce the
   "periodic relay of current state" model over pure edge-triggered
