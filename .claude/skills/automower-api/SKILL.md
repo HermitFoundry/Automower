@@ -986,6 +986,23 @@ empirically, not just theoretically**:
   though it's still much better than REST polling's fixed interval. Revise
   any future design around "frequent periodic check-ins," not "guaranteed
   instant on every real change."
+- **A real, concrete downside of `track`'s fixed-interval design, hit
+  live 2026-07-28**: once a poll picks an interval (e.g. 1800s for
+  "night"), it commits to sleeping the *entire* duration before checking
+  again, with no way to notice mid-sleep that something changed (the user
+  started manually mowing; the dashboard's "Today" session list stayed
+  stale for ~29 minutes until the next poll finally fired). Made worse
+  that day by `config.json`'s `NightStartHour` having been set to `20`
+  (not the coded default of `22`, `Models.cs`'s `Config.NightStartHour`) -
+  fixed via `automower config NightStartHour=22` and a daemon restart, but
+  the fixed-interval blind spot itself is structural, not a config
+  mistake. **Once `eventtracking` replaces polling for real, this whole
+  problem disappears** - a push connection doesn't need to guess a poll
+  interval by time of day at all, so `ScheduledIntervalSeconds`/
+  `IdleIntervalSeconds`/`NightIntervalSeconds`/`NightStartHour`/
+  `NightEndHour` and the whole `DetermineTrackingInterval`/`IsNighttime`
+  machinery would become unnecessary - noted here so it isn't missed
+  when that switch actually happens.
 
 ## External references
 
