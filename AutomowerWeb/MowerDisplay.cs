@@ -94,6 +94,29 @@ public static class MowerDisplay
         ? (a.WorkAreas ?? []).FirstOrDefault(w => w.WorkAreaId == id)?.Name.Trim()
         : null;
 
+    // The full WorkArea for whichever one the mower is currently in - same
+    // lookup as WorkAreaName, just returning the record itself instead of
+    // just its name, for callers that also need Progress/Type (the
+    // dashboard's Progress row).
+    public static WorkArea? CurrentWorkArea(MowerAttributes a) => a.Mower.WorkAreaId is { } id
+        ? (a.WorkAreas ?? []).FirstOrDefault(w => w.WorkAreaId == id)
+        : null;
+
+    // Dashboard top-block "Progress" row: "—" when there's no current work
+    // area at all (matches the "Work area" row's own "—" for that case,
+    // e.g. parked with no active area), "N/A" + an explanatory hover title
+    // when the current area is a "RANDOM"/Irregular pattern (Progress is
+    // never present for one - confirmed live, 2026-07-28 - not just zero),
+    // otherwise the real percentage. No title text for the other two cases
+    // - Razor's title="@..." renders no attribute at all for a null string,
+    // so nothing to explain when there's nothing surprising going on.
+    public static (string Text, string? Title) DashboardProgressCell(WorkArea? currentWorkArea) => currentWorkArea switch
+    {
+        null => ("—", null),
+        { Progress: { } p } => ($"{p}%", null),
+        _ => ("N/A", "Progress not available with Irregular"),
+    };
+
     public static string NextStartLabel(MowerAttributes a) => a.Planner.NextStartTimestamp > 0
         ? DateTimeOffset.FromUnixTimeMilliseconds(a.Planner.NextStartTimestamp).ToLocalTime().ToString("MMM d, HH:mm")
         : "not scheduled";

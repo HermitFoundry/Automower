@@ -45,6 +45,11 @@ else if (_cards.Count == 0 && _error is null)
                     <dd>@MowerDisplay.BatteryLabel(card.BatteryPercent, card.Activity, card.RemainingChargingSeconds)</dd>
                     <dt>Work area</dt>
                     <dd>@(card.WorkAreaName ?? "—")</dd>
+                    @{ var (progressText, progressTitle) = MowerDisplay.DashboardProgressCell(card.CurrentWorkArea); }
+                    <dt>Progress</dt>
+                    <dd title="@progressTitle">@progressText</dd>
+                    <dt>Override</dt>
+                    <dd>@MowerDisplay.OverrideLabel(card.OverrideAction)</dd>
                     <dt>Connected</dt>
                     <dd>@(card.Connected ? "✅ yes" : "❌ no")</dd>
                     <dt>Next start</dt>
@@ -194,7 +199,9 @@ else if (_cards.Count == 0 && _error is null)
                     lastWeek,
                     todayTotals?.Mowing ?? [],
                     todayTotals?.Charging ?? TimeSpan.Zero,
-                    pieSlices));
+                    pieSlices,
+                    MowerDisplay.CurrentWorkArea(a),
+                    a.Planner.Override?.Action));
             }
 
             _cards = cards;
@@ -226,5 +233,7 @@ else if (_cards.Count == 0 && _error is null)
         List<DailyActivity> LastWeek,
         List<WorkAreaTime> TodayMowing,
         TimeSpan TodayCharging,
-        List<MowerDisplay.PieSlice> PieSlices);
+        List<MowerDisplay.PieSlice> PieSlices,
+        WorkArea? CurrentWorkArea,
+        string? OverrideAction);
 }
