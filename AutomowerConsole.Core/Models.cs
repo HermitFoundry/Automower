@@ -219,6 +219,38 @@ public record WorkArea
     [JsonPropertyName("useGlobalCuttingHeight")]
     public bool UseGlobalCuttingHeight { get; init; }
 
+    // Only meaningful for Type == "SYSTEMATIC" (EPOS-guided, precise-
+    // coverage mowing in parallel stripes) - a "RANDOM" work area (the
+    // traditional bounce-around pattern) doesn't have a well-defined "%
+    // covered" at all, and this whole group of fields is simply absent
+    // from the raw API response for one (confirmed live, 2026-07-28: a
+    // RANDOM area's JSON object had none of these keys at all, not even
+    // present-but-null). Progress (0-100) resets each time the area starts
+    // a fresh coverage pass.
+    [JsonPropertyName("progress")]
+    public int? Progress { get; init; }
+
+    // Degrees - the systematic mowing stripe direction. Orientation is the
+    // configured value; CurrentOrientation is what's actually in use right
+    // now (observed equal to Orientation in practice so far, but modeled
+    // separately since the API reports them as two distinct fields -
+    // OrientationShift presumably lets the mower vary the angle slightly
+    // between passes, though that's inferred from the field name, not
+    // confirmed against real varying data yet).
+    [JsonPropertyName("orientation")]
+    public int? Orientation { get; init; }
+
+    [JsonPropertyName("orientationShift")]
+    public int? OrientationShift { get; init; }
+
+    [JsonPropertyName("currentOrientation")]
+    public int? CurrentOrientation { get; init; }
+
+    // Unix epoch milliseconds; 0 means never - when this area last reached
+    // 100% Progress, as opposed to LastTimeAbandoned (left before finishing).
+    [JsonPropertyName("lastTimeCompleted")]
+    public long LastTimeCompleted { get; init; }
+
     // Only present on GET /mowers/{id}/workAreas/{workAreaId}, not on the
     // workAreas[] embedded in GET /mowers/{id}
     [JsonPropertyName("calendar")]

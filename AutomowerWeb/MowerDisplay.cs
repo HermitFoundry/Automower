@@ -133,6 +133,39 @@ public static class MowerDisplay
         return externalLabel is null ? restrictedReason : $"{restrictedReason} - {externalLabel}";
     }
 
+    public static string WorkAreaPatternLabel(string type) => type switch
+    {
+        "RANDOM" => "Random",
+        "SYSTEMATIC" => "Systematic",
+        "" => "—",
+        _ => type,
+    };
+
+    // Progress only means anything for a "SYSTEMATIC" (EPOS-guided,
+    // precise-coverage) work area - a "RANDOM" one doesn't have a
+    // well-defined "% covered" at all, and the raw API omits Progress
+    // entirely for one rather than reporting a meaningless value
+    // (confirmed live, 2026-07-28).
+    public static string WorkAreaProgressCell(WorkArea wa)
+        => wa.Progress is { } p ? $"{p}%" : "—";
+
+    // Extra detail for the Progress cell's hover title - empty string for a
+    // RANDOM area (nothing meaningful to add), not null, so Razor's
+    // title="@..." doesn't render a literal "title" attribute with no value.
+    public static string WorkAreaProgressTitle(WorkArea wa)
+    {
+        if (!string.Equals(wa.Type, "SYSTEMATIC", StringComparison.OrdinalIgnoreCase))
+        {
+            return "";
+        }
+
+        var completed = wa.LastTimeCompleted > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds(wa.LastTimeCompleted).ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+            : "never";
+        var orientationNote = wa.Orientation is { } o ? $"Stripe orientation: {o}°. " : "";
+        return $"{orientationNote}Last completed: {completed}";
+    }
+
     public static string HeadlightModeLabel(string? mode) => mode switch
     {
         null or "" => "—",

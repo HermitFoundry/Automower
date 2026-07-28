@@ -76,13 +76,15 @@ else if (_detail is not null && _stored is not null)
         else
         {
             <table>
-                <thead><tr><th>Name</th><th>Cutting height</th><th>Enabled</th></tr></thead>
+                <thead><tr><th>Name</th><th>Cutting height</th><th>Pattern</th><th>Progress</th><th>Enabled</th></tr></thead>
                 <tbody>
                     @foreach (var wa in a.WorkAreas!)
                     {
                         <tr>
                             <td>@wa.Name.Trim()</td>
                             <td>@CuttingHeightEstimator.Label(wa.CuttingHeight, a.System.Model)</td>
+                            <td>@MowerDisplay.WorkAreaPatternLabel(wa.Type)</td>
+                            <td title="@MowerDisplay.WorkAreaProgressTitle(wa)">@MowerDisplay.WorkAreaProgressCell(wa)</td>
                             <td>@(wa.Enabled ? "✅" : "❌")</td>
                         </tr>
                     }

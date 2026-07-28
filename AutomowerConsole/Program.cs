@@ -324,6 +324,10 @@ async Task CommandWorkAreas(string[] workAreasArgs)
         Console.WriteLine($"      Cutting height:        {wa.CuttingHeight}%");
         Console.WriteLine($"      Use global cut height: {wa.UseGlobalCuttingHeight}");
         Console.WriteLine($"      Last time abandoned:   {abandoned}");
+        foreach (var line in FormatSystematicProgress(wa))
+        {
+            Console.WriteLine($"      {line}");
+        }
     }
 }
 
@@ -395,6 +399,10 @@ async Task CommandWorkArea(string[] queryArgs)
     Console.WriteLine($"  Cutting height:        {detail.CuttingHeight}%");
     Console.WriteLine($"  Use global cut height: {detail.UseGlobalCuttingHeight}");
     Console.WriteLine($"  Last time abandoned:   {abandoned}");
+    foreach (var line in FormatSystematicProgress(detail))
+    {
+        Console.WriteLine($"  {line}");
+    }
 
     var tasks = detail.Calendar?.Tasks ?? [];
     if (tasks.Length == 0)
@@ -427,6 +435,37 @@ string FormatCalendarTask(CalendarTask t)
     var dayList = days.Count > 0 ? string.Join(",", days) : "none";
 
     return $"{dayList,-20} {start:hh\\:mm}-{end:hh\\:mm} ({t.Duration} min)";
+}
+
+// Progress/orientation only mean anything for a "SYSTEMATIC" (EPOS-guided,
+// precise-coverage) work area - a "RANDOM" one doesn't have a well-defined
+// "% covered" at all, and the raw API omits these fields entirely for one
+// (confirmed live, 2026-07-28), not just leaves them null. Returns no
+// lines at all for a RANDOM area, so callers can just splice this into
+// their own output without an extra "not applicable" line to skip past.
+List<string> FormatSystematicProgress(WorkArea wa)
+{
+    if (!string.Equals(wa.Type, "SYSTEMATIC", StringComparison.OrdinalIgnoreCase))
+    {
+        return [];
+    }
+
+    var completed = wa.LastTimeCompleted > 0
+        ? DateTimeOffset.FromUnixTimeMilliseconds(wa.LastTimeCompleted).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+        : "never";
+
+    var lines = new List<string>
+    {
+        $"Progress:              {(wa.Progress is { } p ? $"{p}%" : "—")}",
+        $"Last time completed:   {completed}",
+    };
+    if (wa.Orientation is { } orientation)
+    {
+        var shiftNote = wa.OrientationShift is { } shift and not 0 ? $", shift {shift}°" : "";
+        var currentNote = wa.CurrentOrientation is { } current && current != orientation ? $" (current: {current}°)" : "";
+        lines.Add($"Stripe orientation:    {orientation}°{shiftNote}{currentNote}");
+    }
+    return lines;
 }
 
 async Task CommandStayOutZones(string[] stayOutZonesArgs)
