@@ -6,6 +6,101 @@ replacement for `git log`. `SKILL.md`/`README.md`/`qnap_infrastructure_setup.md`
 hold the durable reference material this work produced; this file is the
 story of how it got there. Newest entry on top.
 
+## 2026-07-28
+
+**Dashboard clock chart, iterated to actually work.** Built a per-mower
+"today at a glance" SVG pie chart for the dashboard (Mowing/Charging
+wedges around a 06:00-18:00 clock face) plus new Mowed/Charging total
+lines - then fixed it through several rounds of real user feedback: the
+first version anchored 06:00 at the top instead of true clock position (6
+belongs at the bottom, like a real analog clock), grey wedges and a white
+"no data" background looked like two different things when they should
+have been one, the app-wide green/blue accent colors didn't read against
+the chart's own background in dark mode (dedicated `--chart-mowing`/
+`--chart-charging` colors fixed it, then the grey background itself needed
+lightening too), and a work-area name breaking the "Mowed" line onto a
+second line threw off vertical alignment across cards (fixed alongside an
+unrelated but similar issue: Nominatim's `Municipality` field baking the
+Swedish/Norwegian word for "municipality" straight into the place name -
+"Piteå kommun" instead of "Piteå").
+
+**A real, self-healing bug fix**: the dashboard occasionally failed to
+load with "Simultaneous logins detected" - traced to `AutomowerConnect`'s
+*initial* authentication call having zero retry at all (unlike the
+retry-after-a-failed-API-call path, which already had one). `AutomowerWeb`
+is one of several independent clients sharing the same app key/secret
+alongside the 3 `track` daemons, and Husqvarna's auth service rejects a
+token request if another one for the same client id lands too close in
+time - a real, transient, self-clearing collision (confirmed by the user:
+reloading moments later always worked). Now retries up to 3 times with a
+short delay, specifically for that error, so a reload is no longer needed.
+
+**Work area progress and cutting pattern**, prompted by the user noticing
+the Husqvarna app showing "0% done in this area" and asking whether that
+was available anywhere in the API. It was - `progress`, `type`
+(`RANDOM`/`SYSTEMATIC`), `orientation`, and `lastTimeCompleted` were all
+real fields this project had never parsed. Confirmed live that `progress`
+only exists on a `SYSTEMATIC` (EPOS-guided) work area at all - a `RANDOM`
+one's raw JSON omits the whole group of fields entirely, not just reports
+them as null. Added to the CLI, the mower details page's work-area table,
+and (per a follow-up request) the dashboard's top block too, alongside a
+newly-added Override row.
+
+**The WebSocket event-push API, actually tried this time.** Built an
+experimental `eventtracking` command and ran it standalone (its own tmux
+session, deliberately not part of the managed `track` fleet) against the
+AM308V for several hours across two real mowing sessions, then started a
+second one against the AM430X NERA for its more complex route the next
+day. This produced a genuine, evidence-based upgrade over the earlier
+"confirmed usable" research from two days prior:
+
+- Directly compared against `track`'s concurrent polling for the same
+  window and found a real, measured gap - 14 straight one-minute polls
+  that missed an entire cluster of state transitions (stop, pause, a
+  work-area reassignment, resume) that happened and fully resolved
+  *between* two polls, plus a second hidden departure attempt that
+  polling's own flat record gave no sign of.
+- Discovered the reverse gap too: no WebSocket event type exists at all
+  for lifetime statistics, `stayOutZones`, work-area *definitions*, or
+  work-area `progress` - confirming aioautomower's own hybrid poll+
+  websocket design wasn't incidental, and a future switch could never go
+  100% websocket-only.
+- Caught a real, provable correction to the "events fire instantly on
+  change" assumption: a genuine 96%→100% charge produced exactly one
+  event with nothing in between, and two byte-identical `100%` battery
+  events arrived 4 minutes apart with zero actual change - a pure
+  edge-triggered model can't explain a duplicate. A `message-event-v2`
+  re-announcing a week-old message twice, an hour apart, nailed the
+  explanation down further.
+- The user then got the *official* explanation pasted directly from the
+  developer portal (a JS SPA `WebFetch` still can't render): the
+  WebSocket has a real, documented 2-hour connection limit (confirmed,
+  not just inferred from aioautomower's own defensive reconnect timer -
+  which our own implementation had already matched), and - the piece that
+  reconciled everything - the mower itself throttles down to a 15-minute
+  check-in cadence after 10 minutes idle, to save battery/data. That one
+  fact explained both the quiet stretches during parked/idle periods and
+  the duplicate-event pattern as documented power-saving behavior, not a
+  quirk. Also got the REST API's own quota (21,000/week, 120/minute per
+  app key) and sanity-checked it against real usage - comfortably under a
+  third of the weekly budget even with three always-on `track` daemons
+  plus a day of ad hoc testing on top.
+- Along the way, chased down why `track`'s own dashboard data went stale
+  for the AM308V mid-session: not a display bug, but `config.json`'s
+  `NightStartHour` having been set to `20` instead of the coded default of
+  `22` - a fixed-interval poller that picks a 30-minute "night" sleep has
+  no way to notice mid-sleep that manual mowing started. Fixed, and noted
+  that this entire class of problem - guessing a poll interval by time of
+  day at all - disappears once (if) `eventtracking` ever replaces polling
+  for real.
+
+Working pattern that showed up clearly this session: real findings kept
+overturning earlier inferences (the "instant on change" assumption, the
+"unexplained" idle gaps) once enough real data accumulated - a good
+argument for treating even the aioautomower-sourced research as a
+starting hypothesis to keep testing, not a settled fact, until official
+documentation or enough real evidence confirms or corrects it.
+
 ## 2026-07-25 to 2026-07-27
 
 **Public deployment finished, then hardened.** `AutomowerWeb` went from an
