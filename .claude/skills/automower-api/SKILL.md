@@ -912,6 +912,63 @@ user, worth having confirmed for whenever it's picked up.
   this ever gets built (e.g. an initial REST poll to catch up after a
   reconnect, then rely on push events between polls).
 
+### Real experiment, 2026-07-28: `eventtracking` command + first live data
+
+Built an experimental `automower eventtracking [mower]` command
+(`EventTrackingService.cs`) that connects to the WebSocket above and logs
+every event for one mower to `.data/events-<mower>.jsonl`, deliberately
+simple compared to aioautomower's own reconnect handling (good enough for
+an unattended run, not tuned as a production client) - reconnects on any
+disconnect (5s delay) or proactively every ~2h, refreshing the access
+token via a new `AutomowerConnect.GetFreshAccessTokenAsync` on every
+(re)connect (a WebSocket connection has no REST call of its own to notice
+an expired token the way the existing retry-on-failure REST logic does).
+Run standalone in its own tmux session, deliberately not wired into
+`startall.sh`/`stopall.sh` - a genuine experiment, not part of the managed
+fleet yet.
+
+**First real run (AM308V, ~19:31-19:59) confirmed the research above
+empirically, not just theoretically**:
+- Only 4 of the 8 event types actually fired in this session:
+  `mower-event-v2` (38), `planner-event-v2` (21), `position-event-v2`
+  (12), `battery-event-v2` (7) - `calendar`/`cuttingHeight`/`headlights`/
+  `message` never fired, unsurprising since none of those actually changed
+  during the window.
+- **Directly compared against `track`'s concurrent REST polling for the
+  same window** - a real, measured gap, not a guess: polling flatlined at
+  `NOT_APPLICABLE` for 14 straight one-minute polls (19:39-19:53) while the
+  websocket showed a real cluster of transitions (`STOPPED` → `PAUSED` → a
+  work-area reassignment → `IN_OPERATION`) happening and fully resolving
+  within one ~24s window that fell *between* two polls - invisible to
+  polling entirely. The websocket also revealed the mower made **two**
+  separate attempts to leave the dock (the first paused almost immediately,
+  only the second turned into real mowing) - polling's own record shows
+  one undifferentiated flat stretch, no sign two attempts happened.
+  Detection lag on state changes generally: websocket ~0.2-1s, polling up
+  to a full poll interval behind.
+- **The reverse comparison matters too - what polling gets that the
+  websocket never will.** Cross-referencing the 8 event types against what
+  this app actually uses: **no event type exists at all** for `statistics`
+  (the "Operation" lifetime section - running/cutting/charging time,
+  charging cycles, drive distance), `stayOutZones`, the `workAreas[]`
+  *definitions* (names/per-area cutting height/enabled - only the single
+  currently-active `workAreaId` scalar is covered, via `mower-event-v2`),
+  `capabilities`, or `system` (name/model/serial, though these are static
+  anyway). Also not present in anything actually captured (weaker
+  confidence - absence in one short window, not proven by the type list
+  itself): `metadata.connected`/`statusTimestamp`, and
+  `battery.remainingChargingTime` (every captured `battery-event-v2`
+  carried only `batteryPercent`). **Confirms aioautomower's own hybrid
+  design wasn't incidental** - a future switch could never go 100%
+  websocket-only; some periodic REST polling would always need to stay
+  around for statistics/stay-out-zones/work-area-definitions at minimum.
+- A parked mower's battery can tick down slightly rather than being kept
+  topped up continuously - confirmed by two independent observations at
+  once (the websocket's own `battery-event-v2` 96%→97% while `PARKED_IN_CS`,
+  and the user separately seeing the same "charging 97%, then moving
+  seconds later" live in the Husqvarna app) - a real mower/app behavior,
+  not an artifact of the new tracking code.
+
 ## External references
 
 - Husqvarna Authentication API (token endpoint):
