@@ -968,6 +968,24 @@ empirically, not just theoretically**:
   and the user separately seeing the same "charging 97%, then moving
   seconds later" live in the Husqvarna app) - a real mower/app behavior,
   not an artifact of the new tracking code.
+- **Correction to "events fire the instant something changes" above -
+  not quite right.** A real charge-up from 96%→100% produced exactly one
+  `battery-event-v2` (`96` then, ~5 minutes later, `100` - nothing in
+  between, no `97`/`98`/`99`), and going home earlier produced `100`→`97`
+  directly, same skipping. More strikingly, two *identical* `100%` events
+  arrived 4 minutes apart with zero other change in the payload (confirmed
+  by diffing the two full messages - byte-for-byte the same
+  `{"batteryPercent":100}`), which a pure edge-triggered "only on change"
+  model can't explain at all. Best-supported theory: the **mower itself
+  phones home periodically** (interval likely varying with activity -
+  faster while moving, matching the ~20-30s position cadence observed
+  elsewhere; slower while idle at the dock), and each check-in gets
+  relayed as delta events for whatever the current values are,
+  independent of whether they moved since the last check-in - meaningfully
+  different from "instant push the millisecond something changes," even
+  though it's still much better than REST polling's fixed interval. Revise
+  any future design around "frequent periodic check-ins," not "guaranteed
+  instant on every real change."
 
 ## External references
 
