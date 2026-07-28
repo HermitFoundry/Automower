@@ -1004,6 +1004,37 @@ empirically, not just theoretically**:
   machinery would become unnecessary - noted here so it isn't missed
   when that switch actually happens.
 
+### A full continuous session, 2026-07-28: settles the open questions
+
+A real ~55-minute unbroken `MOWING` stretch (20:20:15-21:08:17, no activity
+change at all in between) plus a full ~1h48m/254-event session gave a much
+richer sample than the earlier short tests. Confirms and extends the
+findings above:
+
+- **Battery updates during sustained mowing, finally confirmed with clean
+  data** (the earlier short test was too brief to tell): ticked down
+  roughly every 6-7 minutes per 5% drop throughout the whole mow (100% at
+  20:17:45 → 95, 90, 85, 80, 75, 72, 70% by 21:10:46) - a real ~0.8%/min
+  drain rate, and `battery-event-v2` is clearly not limited to charger
+  transitions.
+- **Two more event types observed for the first time -
+  `message-event-v2` and `calendar-event-v2` - and both reinforce the
+  "periodic relay of current state" model over pure edge-triggered
+  events, even more starkly than the duplicate battery reading did.**
+  `message-event-v2` fired twice, 20:09:16 and 21:08:20 (nearly an hour
+  apart), both carrying the *identical* payload: error code `158`
+  ("cellular setting changed") with an embedded message timestamp of
+  **2026-07-21 14:31:17 - a full week before this session**. Not a new
+  message either time - the mower re-announcing a week-old "last known
+  message" on two separate, unrelated check-ins. `calendar-event-v2` also
+  fired twice, both carrying `hovedomrade`'s schedule, both moments
+  coinciding with `workAreaId` briefly touching `8841` (hovedomrade) -
+  plausibly re-sent when area context shifts, weaker confidence than the
+  message finding (only 2 data points, correlation not proven causal).
+- **`progress` never once appeared in any of the 254 raw events** -
+  confirms (not just infers from the type list) that work-area progress
+  has no WebSocket event coverage at all; REST is the only way to get it.
+
 ## External references
 
 - Husqvarna Authentication API (token endpoint):
