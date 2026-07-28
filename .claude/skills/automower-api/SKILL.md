@@ -624,6 +624,27 @@ X-Api-Key: {appKey}
 
 Base URL: `https://api.amc.husqvarna.dev/v1`
 
+## Rate limits (REST API), from the developer portal itself
+
+Pasted directly by the user, 2026-07-28 (source: the `?tab=websocket` and
+OpenAPI tabs - same JS SPA `WebFetch` can't render, so this only exists
+here because it was copied out manually):
+
+- **Quota: 21,000 requests per week, per app key** (≈2 requests/minute
+  averaged over a full week).
+- **Rate limit: 120 requests per minute, per app key.**
+
+Both apply account-wide (one app key registration covers this account's
+`AutomowerConsole`/`AutomowerWeb`/`track`/`eventtracking` - i.e. *all* of
+them share the same quota, not one each). Sanity-checked against real
+usage the same day: all 3 `track` daemons combined made **1,030 requests**
+that one day (`grep -c "2026-07-28" .data/track-*.jsonl`, summed) -
+projecting to ~7,200/week, about a third of the weekly quota, with large
+headroom on the per-minute burst limit too (`track`'s fastest per-mower
+interval is 60s = 1 request/minute; even 3 mowers simultaneously at their
+fastest interval is nowhere near 120/minute). Comfortable margin under
+normal operation, even with ad hoc CLI testing added on top.
+
 ## Endpoints used
 
 - `GET /mowers` — list, `{ "data": [ {id, type, attributes: {...}} ] }`
@@ -901,11 +922,38 @@ user, worth having confirmed for whenever it's picked up.
   of being inferred from periodic snapshots. `track` could stay idle and
   just log whenever a real event actually arrives, rather than polling on
   a fixed/adaptive interval at all.
-- **Open unknown, not answered by anything available here**: no documented
-  connection/rate limits (e.g. one websocket per app key vs. per account,
-  or whether opening one while `track`'s existing REST polling also runs
-  would conflict). Would need empirical testing before committing to this,
-  not just reading the reference client's source.
+- **Official limits, from the developer portal itself** (pasted directly by
+  the user, 2026-07-28 - the "open unknown" above is now answered
+  authoritatively, not inferred):
+  - Only the bearer token is needed for the WebSocket handshake - the
+    `X-Api-Key` header REST calls require is **not** needed for WebSocket.
+    (Already how `EventTrackingService.cs` does it, confirmed correct.)
+  - WebSocket cannot send control commands (start/stop/park) - REST only,
+    for that.
+  - **Hard 2-hour connection limit, confirmed officially** - "WebSocket has
+    a max time limit of 2 hours. To keep the connection alive you have to
+    reconnect before 2 hours have passed. We are working on a solution for
+    this." This is exactly what aioautomower's own ~7195s reconnect timer
+    was defending against - now confirmed as a real server-enforced limit,
+    not just inferred from their client's defensive behavior. Our own
+    `EventTrackingService`'s 2h proactive reconnect is correctly sized.
+  - **The mower itself throttles down after 10 minutes idle, to every 15
+    minutes** - "There is a timeout of 10 minutes in the mower to preserve
+    data traffic and save battery that makes the events to be sent every
+    15 minutes." This reconciles several earlier findings that looked like
+    unexplained gaps or inconsistent event delivery: the long quiet
+    stretches observed while `PARKED_IN_CS`/idle, and the "duplicate
+    battery/message events" pattern (a periodic 15-minute check-in
+    re-announcing current state, whether or not it changed) both make
+    sense as this documented power-saving behavior, not a client bug or
+    an unexplained quirk. Doesn't apply while actively moving/working -
+    the ~30s position cadence and ~6-7min battery cadence observed during
+    real mowing are unaffected.
+  - **Max 10 simultaneous connections per user.** Currently running 2 at
+    once (AM308V, AM430X) - comfortable headroom even for all 3 mowers at
+    once.
+  - **Max 1 new connection per second, per user.** Not something any of
+    our reconnect logic (5s error backoff, 2h proactive) comes close to.
 - `AutomowerSession` also supports an optional REST-poll fallback mode
   (`poll=True`, `REST_POLL_CYCLE = 300` seconds) *alongside* the websocket
   - not an either/or in aioautomower's own design, worth keeping in mind if
