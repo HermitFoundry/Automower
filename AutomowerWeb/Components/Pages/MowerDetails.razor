@@ -301,11 +301,15 @@ else if (_detail is not null && _stored is not null)
         else
         {
             <p class="muted small">
-                Real GPS fixes recorded while actually mowing (not leaving/going
-                home), one dot per fix, colored by work area. Not yet a computed
-                boundary - a first attempt at drawing one cut across unrelated
-                areas, so for now this just shows the raw dot density, which
-                already outlines the rough shape well enough to look at.
+                One dot per poll's newest GPS fix, kept only while actually
+                mowing (not leaving/going home) - colored by work area. Not
+                the poll's full breadcrumb history: that can still hold
+                several minutes of the *previous* stay in a different area
+                (e.g. parked near the charger) for a while after the mower's
+                moved on, which showed up as real dots sitting outside their
+                own area. Not yet a computed boundary either, just the raw
+                dot density - already outlines the rough shape well enough
+                to look at.
             </p>
             <div class="coverage-legend">
                 @foreach (var item in _coveragePlot.Legend)

@@ -8,9 +8,25 @@ namespace AutomowerConsole.Core;
 // while LEAVING/GOING_HOME still carries a workAreaId (whatever area is
 // being traveled to/from), so without this filter, transit path points get
 // mixed into a work area's own coverage cloud and drag any boundary
-// computed from it out toward unrelated territory - confirmed as the root
-// cause of a bad first attempt at this, 2026-07-29 (a one-off Python script
-// grouping by workAreaId alone, no activity filter).
+// computed from it out toward unrelated territory.
+//
+// Only `positions[0]` (the newest breadcrumb) is used per poll - NOT the
+// rest of that poll's up-to-50-entry history. Investigated 2026-07-29 after
+// the user spotted dots clearly outside their own work area on 3 different
+// mowers: a poll's full breadcrumb array can still hold the tail end of the
+// *previous* stay (e.g. several minutes parked near a charger in a
+// different work area) for many polls after the mower has already moved on
+// - confirmed by 3 real episodes where the outlier count decayed by exactly
+// 2 per poll (46->44->42->...), the signature of a sliding 50-point buffer
+// aging out stale history. A simple max-distance-from-position[0] cutoff
+// doesn't work either - normal, uncontaminated within-poll spread is
+// commonly 20-40m on its own (median ~24m across 1,477 real MOWING polls),
+// so a radius tight enough to reject the stale clusters also strips out
+// plenty of genuine data. `positions[0]` is always exactly synchronized
+// with that same poll's own workAreaId, so it's the only entry in the
+// array actually guaranteed correct - confirmed empirically: doing this
+// dropped the outlier count to zero on real data. Costs density (roughly
+// 1 point per poll instead of up to 50), not precision.
 public class CoverageService
 {
     public List<WorkAreaCoverage> GetCoverageByWorkArea(string mowerName)
@@ -39,7 +55,15 @@ public class CoverageService
 
                 var workAreaId = mowerObj.TryGetProperty("workAreaId", out var waIdEl) ? waIdEl.GetInt64() : 0L;
 
-                if (!attributes.TryGetProperty("positions", out var positionsEl) || positionsEl.ValueKind != JsonValueKind.Array)
+                if (!attributes.TryGetProperty("positions", out var positionsEl) ||
+                    positionsEl.ValueKind != JsonValueKind.Array ||
+                    positionsEl.GetArrayLength() == 0)
+                {
+                    continue;
+                }
+
+                var newest = positionsEl[0];
+                if (!newest.TryGetProperty("latitude", out var latEl) || !newest.TryGetProperty("longitude", out var lonEl))
                 {
                     continue;
                 }
@@ -49,14 +73,7 @@ public class CoverageService
                     set = [];
                     byArea[workAreaId] = set;
                 }
-
-                foreach (var pos in positionsEl.EnumerateArray())
-                {
-                    if (pos.TryGetProperty("latitude", out var latEl) && pos.TryGetProperty("longitude", out var lonEl))
-                    {
-                        set.Add(new GpsPoint(latEl.GetDouble(), lonEl.GetDouble()));
-                    }
-                }
+                set.Add(new GpsPoint(latEl.GetDouble(), lonEl.GetDouble()));
             }
             catch (Exception)
             {
