@@ -9,6 +9,11 @@
 
 <div class="page-header">
     <h1>🌱 Mower Dashboard</h1>
+    <div class="day-nav">
+        <button class="btn-nav" @onclick="PreviousDay" disabled="@_loading">◀ Previous</button>
+        <span class="day-nav-label">@DayLabel</span>
+        <button class="btn-nav" @onclick="NextDay" disabled="@(_loading || _dayOffset == 0)">Next ▶</button>
+    </div>
     <button class="btn-refresh" @onclick="LoadAsync" disabled="@_loading">
         @(_loading ? "Refreshing…" : "🔄 Refresh")
     </button>
@@ -69,7 +74,7 @@ else if (_cards.Count == 0 && _error is null)
                     <dt>Charging</dt>
                     <dd>@MowerDisplay.DurationCell(card.TodayCharging)</dd>
                 </dl>
-                <div class="day-chart" title="Today, 06:00–18:00 (approximate)">
+                <div class="day-chart" title="@($"{DayLabel}, 06:00–18:00 (approximate)")">
                     <svg viewBox="0 0 100 100">
                         <circle cx="50" cy="50" r="45" class="day-chart-bg" />
                         @foreach (var slice in card.PieSlices)
@@ -80,10 +85,10 @@ else if (_cards.Count == 0 && _error is null)
                 </div>
             </div>
 
-            <h3>📅 Today</h3>
+            <h3>📅 @DayLabel</h3>
             @if (card.TodaySessions.Count == 0)
             {
-                <p class="muted small">No activity logged today yet.</p>
+                <p class="muted small">No activity logged @(_dayOffset == 0 ? "today" : "that day") yet.</p>
             }
             else
             {
@@ -135,8 +140,28 @@ else if (_cards.Count == 0 && _error is null)
     private List<MowerCard> _cards = [];
     private bool _loading = true;
     private string? _error;
+    private int _dayOffset;
+
+    private string DayLabel => _dayOffset == 0 ? "Today" : $"Today-{_dayOffset}";
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task PreviousDay()
+    {
+        _dayOffset++;
+        await LoadAsync();
+    }
+
+    private async Task NextDay()
+    {
+        if (_dayOffset == 0)
+        {
+            return;
+        }
+
+        _dayOffset--;
+        await LoadAsync();
+    }
 
     // Deliberately no auto-refresh timer here - see AutomowerConsole's
     // SKILL.md on Husqvarna's "simultaneous.logins" auth rejection. This
@@ -153,6 +178,7 @@ else if (_cards.Count == 0 && _error is null)
 
         try
         {
+            var targetDate = DateTimeOffset.Now.Date.AddDays(-_dayOffset);
             var mowers = await MowerService.EnsureMowersAsync();
             var cards = new List<MowerCard>();
 
@@ -163,14 +189,14 @@ else if (_cards.Count == 0 && _error is null)
 
                 var sessions = TrackingService.SummarizeSessions(mower.Name, includeCalendarInfo: false);
                 var today = TrackingService.SplitChargerSessions(
-                    sessions.Where(s => s.Start.Date == DateTimeOffset.Now.Date)).ToList();
+                    sessions.Where(s => s.Start.Date == targetDate)).ToList();
                 var lastWeek = TrackingService.SummarizeDailyActivity(mower.Name).Take(7).ToList();
 
                 // Same already-split session list feeds the session list,
                 // the Mowed/Charging totals, and the pie chart, so none of
                 // the three can ever visually disagree with each other.
                 var todayTotals = TrackingService.AggregateDailyActivity(today).FirstOrDefault();
-                var pieSlices = MowerDisplay.BuildDayPieSlices(today);
+                var pieSlices = MowerDisplay.BuildDayPieSlices(today, DateOnly.FromDateTime(targetDate));
 
                 // Newest breadcrumb (Positions[0]) as "where is it right
                 // now" - absent for a mower with no GPS capability/fix, in

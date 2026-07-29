@@ -275,11 +275,16 @@ public static class MowerDisplay
     // same list the "Today" session list and the Mowed/Charging totals both
     // use - so the chart, the list, and the totals can never visually
     // disagree with each other.
-    public static List<PieSlice> BuildDayPieSlices(IReadOnlyList<TrackSession> todaySessions)
+    // `targetDate` is whichever day the dashboard's Previous/Next control is
+    // currently showing - only when it's actually today does "now" clip an
+    // in-progress session; a past day's window is drawn in full up to 18:00
+    // since nothing about it is still "in progress".
+    public static List<PieSlice> BuildDayPieSlices(IReadOnlyList<TrackSession> todaySessions, DateOnly targetDate)
     {
         var now = DateTimeOffset.Now;
-        var windowStart = new DateTimeOffset(now.Year, now.Month, now.Day, ChartWindowStartHour, 0, 0, now.Offset);
+        var windowStart = new DateTimeOffset(targetDate.Year, targetDate.Month, targetDate.Day, ChartWindowStartHour, 0, 0, now.Offset);
         var windowEnd = windowStart.AddHours(ChartWindowHours);
+        var effectiveNow = targetDate == DateOnly.FromDateTime(now.Date) ? now : windowEnd;
 
         // Position on the dial for a given moment, independent of the
         // window - literally where a real clock's hour hand would point
@@ -295,7 +300,7 @@ public static class MowerDisplay
             }
 
             var segStart = s.Start < windowStart ? windowStart : s.Start;
-            var segEndRaw = s.End ?? now;
+            var segEndRaw = s.End ?? effectiveNow;
             var segEnd = segEndRaw > windowEnd ? windowEnd : segEndRaw;
             if (segEnd <= segStart)
             {

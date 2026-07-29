@@ -152,6 +152,30 @@ a { color: var(--brand); }
 
 .btn-refresh:disabled { opacity: 0.6; cursor: default; }
 
+.day-nav {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.day-nav-label {
+    font-weight: 600;
+    min-width: 5.5rem;
+    text-align: center;
+}
+
+.btn-nav {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.9rem;
+    cursor: pointer;
+    color: inherit;
+}
+
+.btn-nav:disabled { opacity: 0.4; cursor: default; }
+
 .back-link {
     display: inline-block;
     margin-bottom: 1rem;
