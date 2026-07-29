@@ -343,4 +343,75 @@ public static class MowerDisplay
         string F(double n) => n.ToString("F2", CultureInfo.InvariantCulture);
         return $"M {cx},{cy} L {F(x1)},{F(y1)} A {r},{r} 0 {largeArcFlag} 1 {F(x2)},{F(y2)} Z";
     }
+
+    // Cycled by work area index, not tied to any semantic meaning (unlike
+    // --chart-mowing/--chart-charging) - just enough distinct, theme-aware
+    // colors to tell a handful of work areas apart. See app.css.
+    private static readonly string[] CoverageColorVars =
+        ["var(--coverage-1)", "var(--coverage-2)", "var(--coverage-3)", "var(--coverage-4)"];
+
+    public readonly record struct CoverageDot(double Cx, double Cy, string ColorVar);
+    public readonly record struct CoverageLegendItem(string Name, string ColorVar, int Count);
+    public record CoveragePlot(string ViewBox, List<CoverageDot> Dots, List<CoverageLegendItem> Legend);
+
+    // Real GPS fixes recorded while actually mowing (CoverageService already
+    // filtered to activity == "MOWING" - see its own comment on why: a poll
+    // taken while LEAVING/GOING_HOME still carries a workAreaId, so without
+    // that filter transit path points contaminate a work area's own shape),
+    // plotted as raw dots - deliberately NOT a computed boundary yet. A
+    // first attempt at drawing one (a convex hull, done as a one-off Python
+    // script, not in the app) produced boundaries that visibly cut across
+    // unrelated areas - the dot density alone already shows the rough shape
+    // well enough to look at while that gets sorted out. One shared
+    // projection across all of a mower's work areas, so their real relative
+    // positions/sizes stay comparable to each other on one plot.
+    public static CoveragePlot BuildCoveragePlot(List<WorkAreaCoverage> coverage, IReadOnlyDictionary<long, string> workAreaNames)
+    {
+        var withPoints = coverage.Where(c => c.Points.Count > 0).ToList();
+        if (withPoints.Count == 0)
+        {
+            return new CoveragePlot("0 0 1 1", [], []);
+        }
+
+        var allPoints = withPoints.SelectMany(c => c.Points).ToList();
+        var lat0 = allPoints.Average(p => p.Lat);
+        const double MetersPerDegLat = 111320.0;
+        var metersPerDegLon = MetersPerDegLat * Math.Cos(lat0 * Math.PI / 180.0);
+        var minLat = allPoints.Min(p => p.Lat);
+        var minLon = allPoints.Min(p => p.Lon);
+
+        (double X, double Y) ToLocalMeters(GpsPoint p)
+            => ((p.Lon - minLon) * metersPerDegLon, (p.Lat - minLat) * MetersPerDegLat);
+
+        var maxX = allPoints.Max(p => ToLocalMeters(p).X);
+        var maxY = allPoints.Max(p => ToLocalMeters(p).Y);
+        const double Pad = 3.0;
+        var svgHeight = maxY + (2 * Pad);
+
+        (double X, double Y) ToSvg(GpsPoint p)
+        {
+            var (x, y) = ToLocalMeters(p);
+            // SVG y grows downward; north (higher latitude) should be up.
+            return (x + Pad, svgHeight - (y + Pad));
+        }
+
+        var dots = new List<CoverageDot>();
+        var legend = new List<CoverageLegendItem>();
+        for (var i = 0; i < withPoints.Count; i++)
+        {
+            var area = withPoints[i];
+            var colorVar = CoverageColorVars[i % CoverageColorVars.Length];
+            var name = workAreaNames.TryGetValue(area.WorkAreaId, out var n) ? n : $"area {area.WorkAreaId}";
+            legend.Add(new CoverageLegendItem(name, colorVar, area.Points.Count));
+            foreach (var p in area.Points)
+            {
+                var (x, y) = ToSvg(p);
+                dots.Add(new CoverageDot(Math.Round(x, 2), Math.Round(y, 2), colorVar));
+            }
+        }
+
+        var viewBox = string.Create(CultureInfo.InvariantCulture,
+            $"0 0 {maxX + (2 * Pad):F2} {svgHeight:F2}");
+        return new CoveragePlot(viewBox, dots, legend);
+    }
 }

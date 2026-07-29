@@ -62,6 +62,12 @@ h1:focus {
     /* Lighter than --idle, deliberately - the indigo charging wedge still
        didn't read clearly against --idle's darker blue-grey, per the user. */
     --chart-idle: #b0bac2;
+    /* Cycled per work area on the coverage map (MowerDisplay.BuildCoveragePlot)
+       - arbitrary identity colors, not semantic like --mowing/--charging. */
+    --coverage-1: #0e8a72;
+    --coverage-2: #6d3fc9;
+    --coverage-3: #b5651d;
+    --coverage-4: #1f6fb2;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -76,6 +82,10 @@ h1:focus {
         --charging: #64b5f6;
         --idle: #90a4ae;
         --error: #ef5350;
+        --coverage-1: #5ee6c5;
+        --coverage-2: #c9a2ff;
+        --coverage-3: #ffb454;
+        --coverage-4: #8ecbff;
     }
 }
 
@@ -237,6 +247,41 @@ a { color: var(--brand); }
     fill: var(--chart-idle);
     stroke: var(--border);
     stroke-width: 2;
+}
+
+/* Coverage map (MowerDetails, bottom section) - real GPS fixes recorded
+   while mowing, one color per work area. Bigger than the day-chart
+   (this is dot-density, not an icon - needs room to actually read). */
+.coverage-map {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.75rem;
+    max-width: 640px;
+}
+
+.coverage-map svg {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+.coverage-dot { opacity: 0.75; }
+
+.coverage-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1.25rem;
+    margin: 0.5rem 0 0.75rem;
+    font-size: 0.85rem;
+}
+
+.coverage-legend .swatch {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    margin-right: 0.4rem;
 }
 
 .session-list {

@@ -5,6 +5,7 @@
 @inject TrackingService TrackingService
 @inject LocationService LocationService
 @inject WeatherService WeatherService
+@inject CoverageService CoverageService
 
 <PageTitle>@Name - Automower</PageTitle>
 
@@ -290,6 +291,38 @@ else if (_detail is not null && _stored is not null)
             </dl>
         }
     </section>
+
+    <section>
+        <h2>📍 Coverage (experimental)</h2>
+        @if (_coveragePlot is null || _coveragePlot.Dots.Count == 0)
+        {
+            <p class="muted small">No coverage data yet - needs at least one real mowing session logged to track-@(_stored.Name).jsonl.</p>
+        }
+        else
+        {
+            <p class="muted small">
+                Real GPS fixes recorded while actually mowing (not leaving/going
+                home), one dot per fix, colored by work area. Not yet a computed
+                boundary - a first attempt at drawing one cut across unrelated
+                areas, so for now this just shows the raw dot density, which
+                already outlines the rough shape well enough to look at.
+            </p>
+            <div class="coverage-legend">
+                @foreach (var item in _coveragePlot.Legend)
+                {
+                    <span><i class="swatch" style="background:@item.ColorVar"></i>@item.Name <span class="muted">(@item.Count)</span></span>
+                }
+            </div>
+            <div class="coverage-map">
+                <svg viewBox="@_coveragePlot.ViewBox" xmlns="http://www.w3.org/2000/svg">
+                    @foreach (var dot in _coveragePlot.Dots)
+                    {
+                        <circle cx="@dot.Cx" cy="@dot.Cy" r="0.3" class="coverage-dot" fill="@dot.ColorVar" />
+                    }
+                </svg>
+            </div>
+        }
+    </section>
 }
 
 @code {
@@ -305,6 +338,7 @@ else if (_detail is not null && _stored is not null)
     private List<MessageItem> _messages = [];
     private string? _location;
     private WeatherInfo? _weather;
+    private MowerDisplay.CoveragePlot? _coveragePlot;
 
     protected override async Task OnInitializedAsync()
     {
@@ -344,6 +378,11 @@ else if (_detail is not null && _stored is not null)
                 _location = await LocationService.GetPlaceNameAsync(position.Latitude, position.Longitude);
                 _weather = await WeatherService.GetCurrentWeatherAsync(position.Latitude, position.Longitude);
             }
+
+            var workAreaNames = (_detail.Attributes.WorkAreas ?? [])
+                .ToDictionary(w => w.WorkAreaId, w => w.Name.Trim());
+            var coverage = CoverageService.GetCoverageByWorkArea(_stored.Name);
+            _coveragePlot = MowerDisplay.BuildCoveragePlot(coverage, workAreaNames);
         }
         catch (Exception ex)
         {

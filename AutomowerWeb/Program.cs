@@ -36,6 +36,7 @@ builder.Services.AddSingleton<MowerService>();
 builder.Services.AddSingleton<MowerDetailService>();
 builder.Services.AddSingleton<ScheduleService>();
 builder.Services.AddSingleton<TrackingService>();
+builder.Services.AddSingleton<CoverageService>();
 
 // Registered as plain AddSingleton (not AddHttpClient<T>, which would make
 // DI hand out a fresh instance - and fresh, empty cache - on every
