@@ -12,7 +12,7 @@ namespace AutomowerConsole.Core;
 // simple/thin compared to aioautomower's own reconnect handling
 // (session.py) - good enough for an unattended day-long experiment, not
 // tuned as a production client.
-public class EventTrackingService
+public class EventTrackingService(IMowerRepositoryFactory repositoryFactory)
 {
     private const string WebSocketUrl = "wss://ws.openapi.husqvarna.dev/v1";
 
@@ -26,10 +26,9 @@ public class EventTrackingService
     public async Task RunAsync(string mowerId, string mowerName, CancellationToken cancellationToken)
     {
         var connect = AutomowerConnect.Instance;
-        Storage.EnsureDataDir();
-        var logPath = Storage.GetEventLogPath(mowerName);
+        var repository = repositoryFactory.ForMower(mowerName);
 
-        Console.WriteLine($"Event-tracking {mowerName} via WebSocket. Logging every event for this mower to {logPath}. Press Ctrl+C to stop.");
+        Console.WriteLine($"Event-tracking {mowerName} via WebSocket. Logging every event for this mower to {Storage.GetEventLogPath(mowerName)}. Press Ctrl+C to stop.");
         Console.WriteLine($"Reconnects automatically on any disconnect, and proactively every {ProactiveReconnectAfter.TotalHours:0}h.");
 
         var totalRecordCount = 0;
@@ -38,7 +37,7 @@ public class EventTrackingService
         {
             try
             {
-                totalRecordCount += await ListenOnceAsync(connect, mowerId, mowerName, logPath, cancellationToken);
+                totalRecordCount += await ListenOnceAsync(connect, mowerId, repository, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -58,7 +57,7 @@ public class EventTrackingService
             }
         }
 
-        Console.WriteLine($"Stopped. {totalRecordCount} event(s) logged in total. Log file: {logPath}");
+        Console.WriteLine($"Stopped. {totalRecordCount} event(s) logged in total. Log file: {Storage.GetEventLogPath(mowerName)}");
     }
 
     // Runs one WebSocket connection until it closes, errors, or the
@@ -67,7 +66,7 @@ public class EventTrackingService
     // propagates out as OperationCanceledException for RunAsync's loop to
     // stop on; the internal proactive-reconnect timer is swallowed here and
     // just ends the connection cleanly so the caller loops around again.
-    private static async Task<int> ListenOnceAsync(AutomowerConnect connect, string mowerId, string mowerName, string logPath, CancellationToken cancellationToken)
+    private static async Task<int> ListenOnceAsync(AutomowerConnect connect, string mowerId, IMowerRepository repository, CancellationToken cancellationToken)
     {
         var token = await connect.GetFreshAccessTokenAsync();
 
@@ -118,14 +117,7 @@ public class EventTrackingService
                     continue;
                 }
 
-                var record = new
-                {
-                    timestamp = DateTimeOffset.Now,
-                    mowerId,
-                    mowerName,
-                    message = root,
-                };
-                await File.AppendAllTextAsync(logPath, JsonSerializer.Serialize(record) + Environment.NewLine, cancellationToken);
+                await repository.AppendEventAsync(mowerId, text, cancellationToken);
                 recordCount++;
 
                 var summary = isReadyMessage ? "ready" : root.GetProperty("type").GetString();

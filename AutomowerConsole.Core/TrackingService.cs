@@ -10,7 +10,7 @@ namespace AutomowerConsole.Core;
 // MowerService.ResolveMowerAsync - it's feedback intrinsic to the operation,
 // not a separate presentation layer) but SummarizeSessions returns data;
 // callers (CLI or web) do their own presentation on top.
-public class TrackingService(ScheduleService schedule)
+public class TrackingService(ScheduleService schedule, IMowerRepositoryFactory repositoryFactory)
 {
     // Activity values that mean "sitting at the charging station", as opposed
     // to actually out in the garden. Used to group charger-adjacent sessions
@@ -21,18 +21,18 @@ public class TrackingService(ScheduleService schedule)
     public async Task RunAsync(string mowerId, string mowerName, Config config, int activeIntervalSeconds, CancellationToken cancellationToken)
     {
         var connect = AutomowerConnect.Instance;
-        Storage.EnsureDataDir();
+        var repository = repositoryFactory.ForMower(mowerName);
         var logPath = Storage.GetTrackLogPath(mowerName);
         await connect.AuthenticateAsync();
 
         Console.WriteLine($"Tracking {mowerName}. Logging to {logPath}. Press Ctrl+C to stop.");
         Console.WriteLine($"  Active/scheduled: every {activeIntervalSeconds}s   Idle (daytime): every {config.IdleIntervalSeconds}s   " +
                            $"Night ({config.NightStartHour:00}:00-{config.NightEndHour:00}:00): every {config.NightIntervalSeconds}s");
-        Console.WriteLine("The mower's schedule is refreshed from schedule.json's cache each poll (no extra API cost) - run 'schedule' to force an update.");
+        Console.WriteLine("The mower's schedule is refreshed from its cached copy each poll (no extra API cost) - run 'schedule' to force an update.");
 
         // Seed with whatever's cached so the very first wait (before any poll)
         // already has something to work with; refreshed for real after each poll.
-        var tasks = schedule.GetCachedTasks(mowerId);
+        var tasks = schedule.GetCachedTasks(mowerName);
 
         var recordCount = 0;
         long totalBytes = 0;
@@ -55,7 +55,7 @@ public class TrackingService(ScheduleService schedule)
                 tasks = attributes.TryGetProperty("calendar", out var calendarElement)
                     ? calendarElement.Deserialize<CalendarInfo>()?.Tasks ?? []
                     : [];
-                schedule.SaveScheduleForMower(mowerId, mowerName, tasks);
+                schedule.SaveScheduleForMower(mowerName, tasks);
 
                 (nextIntervalSeconds, var reason) = schedule.DetermineTrackingInterval(tasks, activity, activeIntervalSeconds, timestamp, config);
 
@@ -79,15 +79,7 @@ public class TrackingService(ScheduleService schedule)
                 // largest possible miss is one poll interval, not up to
                 // ~30 minutes at night).
                 var byteCount = Encoding.UTF8.GetByteCount(raw);
-                var record = new
-                {
-                    timestamp,
-                    mowerId,
-                    mowerName,
-                    bytes = byteCount,
-                    response = doc.RootElement,
-                };
-                await File.AppendAllTextAsync(logPath, JsonSerializer.Serialize(record) + Environment.NewLine, cancellationToken);
+                await repository.AppendPollAsync(mowerId, raw, timestamp, cancellationToken);
 
                 recordCount++;
                 totalBytes += byteCount;
@@ -131,67 +123,18 @@ public class TrackingService(ScheduleService schedule)
     // BatteryStart. Returned newest first.
     public List<TrackSession> SummarizeSessions(string mowerName, bool includeCalendarInfo)
     {
-        var logPath = Storage.GetTrackLogPath(mowerName);
-        if (!File.Exists(logPath))
+        var history = repositoryFactory.ForMower(mowerName).GetHistory();
+        if (history.Polls.Count == 0)
         {
-            Console.WriteLine($"No track log found for {mowerName} at {logPath}.");
+            Console.WriteLine($"No track log found for {mowerName} at {Storage.GetTrackLogPath(mowerName)}.");
             return [];
         }
 
-        var points = new List<(DateTimeOffset Time, string Activity, int Battery, long WorkAreaId, long PlannerNextStart)>();
-        var workAreaNames = new Dictionary<long, string>();
-        var latestCalendarTasks = Array.Empty<CalendarTask>();
-        var skipped = 0;
-        foreach (var line in File.ReadLines(logPath))
-        {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            try
-            {
-                using var doc = JsonDocument.Parse(line);
-                var root = doc.RootElement;
-                var timestamp = root.GetProperty("timestamp").GetDateTimeOffset();
-                var attributes = root.GetProperty("response").GetProperty("data").GetProperty("attributes");
-                var mowerObj = attributes.GetProperty("mower");
-                var activity = mowerObj.GetProperty("activity").GetString() ?? "UNKNOWN";
-                var workAreaId = mowerObj.TryGetProperty("workAreaId", out var waIdEl) ? waIdEl.GetInt64() : 0L;
-                var battery = attributes.GetProperty("battery").GetProperty("batteryPercent").GetInt32();
-                var plannerNextStart = attributes.TryGetProperty("planner", out var plannerEl) &&
-                    plannerEl.TryGetProperty("nextStartTimestamp", out var nextStartEl)
-                    ? nextStartEl.GetInt64()
-                    : 0L;
-                points.Add((timestamp, activity, battery, workAreaId, plannerNextStart));
-
-                if (attributes.TryGetProperty("workAreas", out var workAreasEl) && workAreasEl.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var wa in workAreasEl.EnumerateArray())
-                    {
-                        if (wa.TryGetProperty("workAreaId", out var idEl) &&
-                            wa.TryGetProperty("name", out var nameEl) &&
-                            !string.IsNullOrWhiteSpace(nameEl.GetString()))
-                        {
-                            workAreaNames[idEl.GetInt64()] = nameEl.GetString()!.Trim();
-                        }
-                    }
-                }
-
-                if (attributes.TryGetProperty("calendar", out var calendarEl) &&
-                    calendarEl.Deserialize<CalendarInfo>() is { Tasks.Length: > 0 } calendarInfo)
-                {
-                    latestCalendarTasks = calendarInfo.Tasks;
-                }
-            }
-            catch (Exception)
-            {
-                skipped++;
-            }
-        }
-
-        if (points.Count == 0)
-        {
-            Console.WriteLine($"Track log for {mowerName} has no readable records.");
-            return [];
-        }
-
+        var workAreaNames = history.WorkAreaNames;
+        var latestCalendarTasks = history.LatestCalendarTasks;
+        var points = history.Polls
+            .Select(p => (Time: p.Timestamp, p.Activity, Battery: p.BatteryPercent, p.WorkAreaId, PlannerNextStart: p.PlannerNextStartTimestamp))
+            .ToList();
         points.Sort((a, b) => a.Time.CompareTo(b.Time));
 
         // Grouping has to scan oldest-to-newest (each session's end depends on
@@ -248,9 +191,9 @@ public class TrackingService(ScheduleService schedule)
         sessions = BackfillChargingEndBattery(sessions);
         sessions.Reverse();
 
-        if (skipped > 0)
+        if (history.SkippedLines > 0)
         {
-            Console.WriteLine($"  ({skipped} malformed line(s) skipped)");
+            Console.WriteLine($"  ({history.SkippedLines} malformed line(s) skipped)");
         }
 
         return sessions;

@@ -18,11 +18,13 @@ Config? cachedConfig = null;
 // (and therefore never read config.json) until a method body that actually
 // needs the API runs. help/config/errorcodes/current rely on that to keep
 // working with no config.json at all.
-var mowerService = new MowerService();
+var mowerRepositoryFactory = new JsonlMowerRepositoryFactory();
+var mowerRegistry = new JsonlMowerRegistry();
+var mowerService = new MowerService(mowerRegistry);
 var mowerDetailService = new MowerDetailService();
-var scheduleService = new ScheduleService();
-var trackingService = new TrackingService(scheduleService);
-var eventTrackingService = new EventTrackingService();
+var scheduleService = new ScheduleService(mowerRepositoryFactory);
+var trackingService = new TrackingService(scheduleService, mowerRepositoryFactory);
+var eventTrackingService = new EventTrackingService(mowerRepositoryFactory);
 
 switch (command)
 {
@@ -539,11 +541,11 @@ async Task CommandSchedule(string[] scheduleArgs)
     var mower = await mowerDetailService.GetMowerDetailAsync(mowerId);
     var tasks = mower.Attributes.Calendar?.Tasks ?? [];
 
-    scheduleService.SaveScheduleForMower(mowerId, mowerName, tasks);
+    scheduleService.SaveScheduleForMower(mowerName, tasks);
 
     if (tasks.Length == 0)
     {
-        Console.WriteLine($"No schedule configured for {mowerName}. Cached to schedule.json (empty).");
+        Console.WriteLine($"No schedule configured for {mowerName}. Cached to {Storage.GetScheduleLogPath(mowerName)} (empty).");
         return;
     }
 
@@ -551,7 +553,7 @@ async Task CommandSchedule(string[] scheduleArgs)
         .Where(wa => !string.IsNullOrWhiteSpace(wa.Name))
         .ToDictionary(wa => wa.WorkAreaId, wa => wa.Name.Trim());
 
-    Console.WriteLine($"Schedule for {mowerName} (refreshed in schedule.json):");
+    Console.WriteLine($"Schedule for {mowerName} (refreshed in {Storage.GetScheduleLogPath(mowerName)}):");
     foreach (var t in tasks)
     {
         var workAreaNote = t.WorkAreaId is { } waId

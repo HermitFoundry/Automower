@@ -6,7 +6,7 @@ namespace AutomowerConsole.Core;
 // (ambiguous match, not found, fetching-from-API notices) since those are
 // intrinsic to the resolution process itself, not a separate presentation
 // layer on top of it.
-public class MowerService
+public class MowerService(IMowerRegistry registry)
 {
     public async Task<List<StoredMower>> RefreshMowersAsync()
     {
@@ -14,13 +14,13 @@ public class MowerService
         var mowers = fetched
             .Select(m => new StoredMower(m.Id, m.Attributes.System.Name, m.Attributes.System.Model, m.Attributes.System.SerialNumber))
             .ToList();
-        Storage.SaveMowers(mowers);
+        registry.SaveMowers(mowers);
         return mowers;
     }
 
     public async Task<List<StoredMower>> EnsureMowersAsync()
     {
-        var mowers = Storage.LoadMowers();
+        var mowers = registry.LoadMowers();
         if (mowers is null || mowers.Count == 0)
         {
             Console.WriteLine("No cached mower list found, fetching from API...");

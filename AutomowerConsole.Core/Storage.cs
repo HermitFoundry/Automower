@@ -39,6 +39,13 @@ public static class Storage
     public static string GetEventLogPath(string mowerName)
         => Path.Combine(DataDir, $"events-{SanitizeForFileName(mowerName)}.jsonl");
 
+    // One cached-schedule file per mower (JsonlMowerRepository) - replaces
+    // the old shared schedule.json (see LoadSchedules below), which was
+    // rewritten wholesale on every single poll from any of the independent
+    // 'track' daemons, a real write race between them.
+    public static string GetScheduleLogPath(string mowerName)
+        => Path.Combine(DataDir, $"schedule-{SanitizeForFileName(mowerName)}.json");
+
     private static string SanitizeForFileName(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();
@@ -127,12 +134,14 @@ public static class Storage
         return JsonSerializer.Deserialize<ActiveState>(File.ReadAllText(StatePath));
     }
 
-    public static void SaveSchedules(Dictionary<string, MowerSchedule> schedules)
-    {
-        EnsureDataDir();
-        File.WriteAllText(SchedulePath, JsonSerializer.Serialize(schedules, JsonOptions));
-    }
-
+    // Legacy/migration-only: schedule.json (all mowers in one dict) has been
+    // replaced by JsonlMowerRepository's per-mower schedule-<mower>.json
+    // files. Nothing writes schedule.json anymore - this read-only survivor
+    // exists solely so JsonlMowerRepository can seed a mower's new per-mower
+    // file from whatever was already cached here, the first time it's asked
+    // for a schedule. Safe to delete once every mower has its own
+    // schedule-<mower>.json (i.e. after 'track' has run at least once per
+    // mower since this migration).
     public static Dictionary<string, MowerSchedule> LoadSchedules()
     {
         if (!File.Exists(SchedulePath)) return [];

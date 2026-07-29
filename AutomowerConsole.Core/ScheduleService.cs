@@ -4,7 +4,7 @@ namespace AutomowerConsole.Core;
 // calculation plus Storage-backed caching - no AutomowerConnect dependency.
 // DateTimeOffset.IsNighttime(...) (Extensions.cs) is a separate, pre-existing
 // piece of schedule-timing logic; this class calls it rather than duplicating it.
-public class ScheduleService
+public class ScheduleService(IMowerRepositoryFactory repositoryFactory)
 {
     public bool DayFlag(CalendarTask t, DayOfWeek day) => day switch
     {
@@ -62,15 +62,11 @@ public class ScheduleService
         return null;
     }
 
-    public void SaveScheduleForMower(string mowerId, string mowerName, CalendarTask[] tasks)
-    {
-        var schedules = Storage.LoadSchedules();
-        schedules[mowerId] = new MowerSchedule(mowerName, DateTimeOffset.Now, tasks);
-        Storage.SaveSchedules(schedules);
-    }
+    public void SaveScheduleForMower(string mowerName, CalendarTask[] tasks)
+        => repositoryFactory.ForMower(mowerName).SaveSchedule(tasks);
 
-    public CalendarTask[] GetCachedTasks(string mowerId)
-        => Storage.LoadSchedules().TryGetValue(mowerId, out var entry) ? entry.Tasks : [];
+    public CalendarTask[] GetCachedTasks(string mowerName)
+        => repositoryFactory.ForMower(mowerName).GetSchedule();
 
     // 'track's next-poll-interval decision: fast while active or in a
     // scheduled window (charge duration is unpredictable, so poll fast to
