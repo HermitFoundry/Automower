@@ -6,6 +6,58 @@ replacement for `git log`. `SKILL.md`/`README.md`/`qnap_infrastructure_setup.md`
 hold the durable reference material this work produced; this file is the
 story of how it got there. Newest entry on top.
 
+## 2026-07-29
+
+**The eventtracking experiment kept running overnight and validated the
+reconnect logic for real.** Two sessions (AM308V, AM430X NERA) survived a
+full 8+ hour overnight span across 7 proactive reconnect cycles with zero
+crashes. Surfaced one more real finding along the way: AM308V's connection
+took 3 early server-initiated closes (well under the documented 2h limit,
+irregular intervals) before settling into a clean exact-2-hour cadence,
+while AM430X's connection never had a single early close - the official
+"max 2 hours" language apparently doesn't mean every connection routinely
+lasts that long.
+
+**A GPS boundary-reconstruction detour, which turned into a real feature.**
+The user asked whether a work area's outer boundary could be reconstructed
+from the accumulated position data. A first pass (a one-off Python script,
+convex hull, grouped by `workAreaId` alone) produced visibly wrong
+boundaries - the user caught it immediately ("draws different non-related
+areas"). Investigation found the real cause: a poll's full `positions[]`
+breadcrumb array (up to 50 entries) can still hold several minutes of the
+mower's *previous* stay in a different work area (e.g. parked near a
+charger) for many polls after it's actually moved on - confirmed
+unambiguously by 3 real episodes where the contamination count decayed by
+exactly 2 per poll, the signature of a sliding buffer aging out stale
+history. A simple distance-from-current-position cutoff didn't work either
+- normal within-poll spread is commonly 20-40m on its own. The fix that
+actually worked: use only `positions[0]` (the newest breadcrumb, always
+synchronized with that same poll's own `workAreaId`) per poll, discarding
+the rest of the array entirely - confirmed empirically to drop the outlier
+count to zero while barely denting real coverage density.
+
+This became a real, permanent feature: `CoverageService` (reads a track
+log, extracts per-work-area GPS coverage) plus a new "Coverage
+(experimental)" section at the bottom of the mower details page - dots
+only, no computed boundary polygon yet, deliberately live-computed in the
+web app rather than a separate background process, per the user's own call
+to validate the shape quality first. Confirmed clean by the user across all
+three mowers after the fix, including a single-work-area mower (AM405X)
+where the same fix resolved a differently-caused version of the same
+underlying problem (stale history from a charger stay, just without a
+second work area ID to distinguish it).
+
+One loose end chased down out of general due diligence, not because it
+turned out to be a real problem: the user's original idea for catching bad
+GPS fixes was a speed check between consecutive points. Once the coverage
+fix gave genuinely clean one-point-per-poll data with reliable ~60s
+inter-poll timing, that became straightforward to actually compute - real
+observed max speeds across all three mowers topped out under 0.5 m/s, zero
+flagged flukes with a generous 1.5 m/s threshold. A recurring, tight,
+5-day-consistent cluster on AM405X near a house wall turned out not to be a
+fluke at all - real GPS multipath bias from working close to a building,
+left alone rather than "fixed."
+
 ## 2026-07-28
 
 **Dashboard clock chart, iterated to actually work.** Built a per-mower
