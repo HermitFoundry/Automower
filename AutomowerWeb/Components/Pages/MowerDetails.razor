@@ -6,6 +6,7 @@
 @inject LocationService LocationService
 @inject WeatherService WeatherService
 @inject CoverageService CoverageService
+@inject IMowerRepositoryFactory MowerRepositoryFactory
 
 <PageTitle>@Name - Automower</PageTitle>
 
@@ -293,6 +294,53 @@ else if (_detail is not null && _stored is not null)
     </section>
 
     <section>
+        <h2>🌱 Seasons</h2>
+        @if (_seasons.Count == 0)
+        {
+            <p class="muted small">No daily statistics recorded yet - the first snapshot is written once a full calendar day of tracking has passed.</p>
+        }
+        else
+        {
+            <p class="muted small">
+                One snapshot per calendar day of the counters above - a gap of
+                @TrackingService.SeasonGapDays+ days between recorded days starts a
+                new season. Each season's numbers below are the growth between its
+                first and last recorded day, not an absolute total.
+            </p>
+            @for (var i = 0; i < _seasons.Count; i++)
+            {
+                var season = _seasons[i];
+                var start = season[0];
+                var end = season[^1];
+                var isOngoing = i == _seasons.Count - 1;
+                <h3>
+                    Season @(i + 1): @start.Date.ToString("yyyy-MM-dd") to @end.Date.ToString("yyyy-MM-dd")@(isOngoing ? " (ongoing)" : "")
+                    <span class="muted small">(@season.Count day(s) recorded)</span>
+                </h3>
+                @if (season.Count == 1)
+                {
+                    <p class="muted small">Only one day recorded so far - no growth to show yet.</p>
+                }
+                else
+                {
+                    <dl class="mower-facts">
+                        <dt>Running</dt>
+                        <dd>+@MowerDisplay.LifetimeDuration(end.Statistics.TotalRunningTime - start.Statistics.TotalRunningTime)</dd>
+                        <dt>Cutting</dt>
+                        <dd>+@MowerDisplay.LifetimeDuration(end.Statistics.TotalCuttingTime - start.Statistics.TotalCuttingTime)</dd>
+                        <dt>Charging</dt>
+                        <dd>+@MowerDisplay.LifetimeDuration(end.Statistics.TotalChargingTime - start.Statistics.TotalChargingTime)</dd>
+                        <dt>Charging cycles</dt>
+                        <dd>+@(end.Statistics.NumberOfChargingCycles - start.Statistics.NumberOfChargingCycles)</dd>
+                        <dt>Drive distance</dt>
+                        <dd>+@MowerDisplay.Distance(end.Statistics.TotalDriveDistance - start.Statistics.TotalDriveDistance)</dd>
+                    </dl>
+                }
+            }
+        }
+    </section>
+
+    <section>
         <h2>📍 Coverage (experimental)</h2>
         @if (_coveragePlot is null || _coveragePlot.Dots.Count == 0)
         {
@@ -343,6 +391,7 @@ else if (_detail is not null && _stored is not null)
     private string? _location;
     private WeatherInfo? _weather;
     private MowerDisplay.CoveragePlot? _coveragePlot;
+    private List<List<DailyStatisticsSnapshot>> _seasons = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -387,6 +436,11 @@ else if (_detail is not null && _stored is not null)
                 .ToDictionary(w => w.WorkAreaId, w => w.Name.Trim());
             var coverage = CoverageService.GetCoverageByWorkArea(_stored.Name);
             _coveragePlot = MowerDisplay.BuildCoveragePlot(coverage, workAreaNames);
+
+            var dailyStatistics = MowerRepositoryFactory.ForMower(_stored.Name).GetDailyStatisticsHistory()
+                .OrderBy(d => d.Date)
+                .ToList();
+            _seasons = TrackingService.GroupIntoSeasons(dailyStatistics);
         }
         catch (Exception ex)
         {
