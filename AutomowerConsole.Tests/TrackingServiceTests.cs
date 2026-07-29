@@ -405,8 +405,12 @@ public class TrackingServiceAggregateDailyActivityTests
 [TestFixture]
 public class TrackingServiceGroupIntoSeasonsTests
 {
+    // Non-zero by default - most of these tests represent ordinary recorded
+    // days, not the special all-zero baseline marker (which tests that care
+    // about it construct explicitly, to keep that intent visible at the call
+    // site rather than hidden behind a default parameter).
     private static DailyStatisticsSnapshot Day(int year, int month, int day)
-        => new(new DateOnly(year, month, day), new StatisticsInfo());
+        => new(new DateOnly(year, month, day), new StatisticsInfo { TotalRunningTime = 1 });
 
     [Test]
     public void EmptyInputProducesNoSeasons()
@@ -448,5 +452,36 @@ public class TrackingServiceGroupIntoSeasonsTests
         var seasons = TrackingService.GroupIntoSeasons([first, second]);
 
         Assert.That(seasons, Has.Count.EqualTo(1), "a gap of exactly SeasonGapDays should stay within the same season - only a gap LONGER than that starts a new one");
+    }
+
+    [Test]
+    public void AnAllZeroBaselineNeverSplitsIntoItsOwnSeasonNoMatterTheGap()
+    {
+        // Real case (2026-07-29, AM308V): a manually-seeded zero baseline on
+        // the mower's actual purchase date, 82 days before this tool's first
+        // real recorded day - should anchor one season, not become its own
+        // isolated single-day season.
+        var baseline = new DailyStatisticsSnapshot(new DateOnly(2026, 5, 1), new StatisticsInfo());
+        var realDataStart = new DailyStatisticsSnapshot(new DateOnly(2026, 7, 22), new StatisticsInfo { TotalRunningTime = 405838 });
+        var realDataEnd = new DailyStatisticsSnapshot(new DateOnly(2026, 7, 28), new StatisticsInfo { TotalRunningTime = 430438 });
+
+        var seasons = TrackingService.GroupIntoSeasons([baseline, realDataStart, realDataEnd]);
+
+        Assert.That(seasons, Has.Count.EqualTo(1), "the zero baseline should anchor the season that follows it, not split off into its own");
+        Assert.That(seasons[0], Is.EqualTo(new[] { baseline, realDataStart, realDataEnd }));
+    }
+
+    [Test]
+    public void ANonZeroRecordFollowedByALongGapStillStartsANewSeason()
+    {
+        // Confirms the zero-baseline exception is specific to an all-zero
+        // record, not a blanket "never split" - real usage data with a real
+        // long gap after it should still split normally.
+        var lastOfSeasonOne = new DailyStatisticsSnapshot(new DateOnly(2026, 4, 10), new StatisticsInfo { TotalRunningTime = 100 });
+        var firstOfSeasonTwo = new DailyStatisticsSnapshot(lastOfSeasonOne.Date.AddDays(TrackingService.SeasonGapDays + 1), new StatisticsInfo { TotalRunningTime = 200 });
+
+        var seasons = TrackingService.GroupIntoSeasons([lastOfSeasonOne, firstOfSeasonTwo]);
+
+        Assert.That(seasons, Has.Count.EqualTo(2));
     }
 }

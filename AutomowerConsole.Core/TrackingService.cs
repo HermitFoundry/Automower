@@ -27,10 +27,20 @@ public class TrackingService(ScheduleService schedule, IMowerRepositoryFactory r
 
     // Groups a mower's daily statistics history (IMowerRepository.
     // GetDailyStatisticsHistory) into seasons: runs of consecutive recorded
-    // days with no gap longer than SeasonGapDays between them. Expects
-    // chronologically sorted input; returns each season as its own
-    // chronologically sorted list, oldest season first - a caller wanting
-    // "how much this season" just diffs a season's first and last entries.
+    // days with no gap longer than SeasonGapDays between them - EXCEPT a gap
+    // immediately after an all-zero record never splits, no matter how large.
+    // An all-zero StatisticsInfo can't occur from real tracking (lifetime
+    // counters only monotonically increase), so it can only mean one thing: a
+    // manually-inserted "season start" baseline (see CommandBaseline in
+    // Program.cs, added 2026-07-29 for exactly this - e.g. backdating a
+    // mower's season to its purchase date, months before this tool started
+    // tracking it). Without this exception, that large date gap would read as
+    // a real offline stretch and incorrectly split the deliberate baseline
+    // into its own single-day season instead of anchoring the real one that
+    // follows it. Expects chronologically sorted input; returns each season
+    // as its own chronologically sorted list, oldest season first - a caller
+    // wanting "how much this season" just diffs a season's first and last
+    // entries.
     public static List<List<DailyStatisticsSnapshot>> GroupIntoSeasons(IReadOnlyList<DailyStatisticsSnapshot> chronological)
     {
         var seasons = new List<List<DailyStatisticsSnapshot>>();
@@ -42,7 +52,9 @@ public class TrackingService(ScheduleService schedule, IMowerRepositoryFactory r
         var current = new List<DailyStatisticsSnapshot> { chronological[0] };
         for (var i = 1; i < chronological.Count; i++)
         {
-            if (chronological[i].Date.DayNumber - chronological[i - 1].Date.DayNumber > SeasonGapDays)
+            var gapTooLong = chronological[i].Date.DayNumber - chronological[i - 1].Date.DayNumber > SeasonGapDays;
+            var previousIsZeroBaseline = chronological[i - 1].Statistics == new StatisticsInfo();
+            if (gapTooLong && !previousIsZeroBaseline)
             {
                 seasons.Add(current);
                 current = [];

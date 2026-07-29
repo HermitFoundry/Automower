@@ -79,6 +79,9 @@ switch (command)
     case "seasons":
         await CommandSeasons(rest);
         break;
+    case "baseline":
+        await CommandBaseline(rest);
+        break;
     case "help":
     case "-h":
     case "--help":
@@ -761,6 +764,44 @@ async Task CommandSeasons(string[] seasonArgs)
     }
 }
 
+// Manually seeds an all-zero daily statistics record on an arbitrary past
+// date - e.g. a mower's actual purchase date, months before this tool
+// started tracking it, so 'seasons' has a real "day zero" to diff against
+// instead of starting mid-lifetime. All-zero is deliberate, not just "no
+// data supplied": TrackingService.GroupIntoSeasons treats an all-zero record
+// as a season-start marker and never splits a season immediately after one,
+// no matter how large the date gap to the real data that follows is.
+async Task CommandBaseline(string[] baselineArgs)
+{
+    if (baselineArgs.Length == 0)
+    {
+        Console.WriteLine("Usage: automower baseline <YYYY-MM-DD> [mower]");
+        return;
+    }
+
+    if (!DateOnly.TryParseExact(baselineArgs[0], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+    {
+        Console.WriteLine($"Invalid date '{baselineArgs[0]}' - expected format YYYY-MM-DD, e.g. 2026-05-01.");
+        return;
+    }
+
+    var resolved = await mowerService.ResolveMowerAsync(baselineArgs.Skip(1).FirstOrDefault());
+    if (resolved is null) return;
+    var (_, mowerName) = resolved.Value;
+
+    var repository = mowerRepositoryFactory.ForMower(mowerName);
+    if (repository.GetDailyStatisticsHistory().Any(d => d.Date == date))
+    {
+        Console.WriteLine($"A daily statistics record for {mowerName} on {date:yyyy-MM-dd} already exists - refusing to overwrite it. " +
+                           $"Remove that line from {Storage.GetStatisticsLogPath(mowerName)} first if you really want to replace it.");
+        return;
+    }
+
+    await repository.AppendDailyStatisticsAsync(new DailyStatisticsSnapshot(date, new StatisticsInfo()));
+    Console.WriteLine($"Added a zero-baseline daily statistics record for {mowerName} on {date:yyyy-MM-dd} (all lifetime counters set to 0).");
+    Console.WriteLine("'seasons' will anchor this as that season's start, regardless of the gap to whatever real data follows it.");
+}
+
 // Same convention as AutomowerWeb's MowerDisplay.LifetimeDuration/Distance
 // (plain hours with thousands separators, km once >=1000m) - matches how
 // Husqvarna's own app presents these lifetime counters. Duplicated here
@@ -832,6 +873,11 @@ void PrintUsage()
                                                  from a daily snapshot 'track' writes once per calendar
                                                  day (see daily statistics log). A gap of 30+ days
                                                  between recorded days starts a new season.
+          automower baseline <YYYY-MM-DD> [mower]
+                                                 Seed an all-zero daily statistics record on a past date
+                                                 (e.g. the mower's actual purchase date) so 'seasons' has
+                                                 a real day-zero to diff against, instead of starting
+                                                 mid-lifetime from whenever this tool first tracked it.
           automower help                        Show this help
         """);
 }
