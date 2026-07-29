@@ -16,7 +16,16 @@ public record PollRecord(
     long WorkAreaId,
     long PlannerNextStartTimestamp,
     double? Latitude,
-    double? Longitude);
+    double? Longitude,
+    StatisticsInfo? Statistics);
+
+// One calendar day's end-of-day snapshot of the mower's lifetime usage
+// counters (StatisticsInfo - cumulative since setup, not a daily delta) -
+// see TrackingService.RunAsync for how/when this gets written. Diffing two
+// of these (e.g. season start vs. season end) gives "how much this season";
+// keeping one per day instead of just a running total also gives within-
+// season trends for free.
+public record DailyStatisticsSnapshot(DateOnly Date, StatisticsInfo Statistics);
 
 // Single-pass result of scanning a mower's whole poll history. WorkAreaNames
 // and LatestCalendarTasks are rolling snapshots accumulated across the same
@@ -45,6 +54,14 @@ public interface IMowerRepository
     void SaveSchedule(CalendarTask[] tasks);
 
     Task AppendEventAsync(string mowerId, string rawMessageJson, CancellationToken cancellationToken = default);
+
+    // Append-only, one row per calendar day, forever - "180 records for a
+    // season" (see the 2026-07-29 discussion) is trivial at this scale, so
+    // no pruning/compaction is attempted. Never call this twice for the same
+    // Date; TrackingService.RunAsync guards against that itself rather than
+    // pushing an upsert-vs-append decision down into the storage seam.
+    Task AppendDailyStatisticsAsync(DailyStatisticsSnapshot snapshot, CancellationToken cancellationToken = default);
+    IReadOnlyList<DailyStatisticsSnapshot> GetDailyStatisticsHistory();
 }
 
 public interface IMowerRepositoryFactory
@@ -69,6 +86,7 @@ public class JsonlMowerRepository(string mowerName) : IMowerRepository
     private readonly string _logPath = Storage.GetTrackLogPath(mowerName);
     private readonly string _eventLogPath = Storage.GetEventLogPath(mowerName);
     private readonly string _schedulePath = Storage.GetScheduleLogPath(mowerName);
+    private readonly string _statisticsLogPath = Storage.GetStatisticsLogPath(mowerName);
 
     public async Task AppendPollAsync(string mowerId, string rawJson, DateTimeOffset timestamp, CancellationToken cancellationToken = default)
     {
@@ -145,7 +163,11 @@ public class JsonlMowerRepository(string mowerName) : IMowerRepository
                     }
                 }
 
-                polls.Add(new PollRecord(timestamp, activity, battery, workAreaId, plannerNextStart, latitude, longitude));
+                var statistics = attributes.TryGetProperty("statistics", out var statsEl)
+                    ? statsEl.Deserialize<StatisticsInfo>()
+                    : null;
+
+                polls.Add(new PollRecord(timestamp, activity, battery, workAreaId, plannerNextStart, latitude, longitude, statistics));
 
                 if (attributes.TryGetProperty("workAreas", out var workAreasEl) && workAreasEl.ValueKind == JsonValueKind.Array)
                 {
@@ -222,5 +244,37 @@ public class JsonlMowerRepository(string mowerName) : IMowerRepository
             message = doc.RootElement,
         };
         await File.AppendAllTextAsync(_eventLogPath, JsonSerializer.Serialize(record) + Environment.NewLine, cancellationToken);
+    }
+
+    public async Task AppendDailyStatisticsAsync(DailyStatisticsSnapshot snapshot, CancellationToken cancellationToken = default)
+    {
+        Storage.EnsureDataDir();
+        await File.AppendAllTextAsync(_statisticsLogPath, JsonSerializer.Serialize(snapshot) + Environment.NewLine, cancellationToken);
+    }
+
+    public IReadOnlyList<DailyStatisticsSnapshot> GetDailyStatisticsHistory()
+    {
+        if (!File.Exists(_statisticsLogPath))
+        {
+            return [];
+        }
+
+        var result = new List<DailyStatisticsSnapshot>();
+        foreach (var line in File.ReadLines(_statisticsLogPath))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            try
+            {
+                if (JsonSerializer.Deserialize<DailyStatisticsSnapshot>(line) is { } snapshot)
+                {
+                    result.Add(snapshot);
+                }
+            }
+            catch (Exception)
+            {
+                // Same tolerance as GetHistory() - skip a malformed line rather than fail the whole read.
+            }
+        }
+        return result;
     }
 }

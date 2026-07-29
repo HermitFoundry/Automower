@@ -46,6 +46,11 @@ public static class Storage
     public static string GetScheduleLogPath(string mowerName)
         => Path.Combine(DataDir, $"schedule-{SanitizeForFileName(mowerName)}.json");
 
+    // One end-of-day lifetime-statistics snapshot per line, forever -
+    // JsonlMowerRepository.AppendDailyStatisticsAsync/GetDailyStatisticsHistory.
+    public static string GetStatisticsLogPath(string mowerName)
+        => Path.Combine(DataDir, $"statistics-{SanitizeForFileName(mowerName)}.jsonl");
+
     private static string SanitizeForFileName(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();

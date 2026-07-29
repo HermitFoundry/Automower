@@ -34,6 +34,17 @@ public class TrackingService(ScheduleService schedule, IMowerRepositoryFactory r
         // already has something to work with; refreshed for real after each poll.
         var tasks = schedule.GetCachedTasks(mowerName);
 
+        // Daily lifetime-statistics snapshots (see MowerRepository.cs's
+        // DailyStatisticsSnapshot) - backfill any fully-completed day missing
+        // from the daily log first (covers gaps from restarts or extended
+        // offline stretches, e.g. winter storage - that just shows up as a
+        // gap in the daily table, no special "season" handling needed), then
+        // track state in memory below so a same-run day rollover gets
+        // recorded the moment it's first seen, without re-scanning the whole
+        // track log on every poll.
+        var (lastKnownDate, lastKnownStatistics, lastStoredStatisticsDate) =
+            await BackfillDailyStatisticsAsync(repository, cancellationToken);
+
         var recordCount = 0;
         long totalBytes = 0;
 
@@ -81,6 +92,23 @@ public class TrackingService(ScheduleService schedule, IMowerRepositoryFactory r
                 var byteCount = Encoding.UTF8.GetByteCount(raw);
                 await repository.AppendPollAsync(mowerId, raw, timestamp, cancellationToken);
 
+                // Rolled over to a new calendar day since the last poll we
+                // saw - record yesterday's end-of-day snapshot now, using the
+                // last statistics actually observed for it (not this poll's,
+                // which already belongs to today).
+                var today = DateOnly.FromDateTime(timestamp.Date);
+                if (lastKnownDate is { } previousDate && previousDate < today && lastKnownStatistics is not null &&
+                    (lastStoredStatisticsDate is null || lastStoredStatisticsDate < previousDate))
+                {
+                    await repository.AppendDailyStatisticsAsync(new DailyStatisticsSnapshot(previousDate, lastKnownStatistics), cancellationToken);
+                    lastStoredStatisticsDate = previousDate;
+                }
+                lastKnownDate = today;
+                if (attributes.TryGetProperty("statistics", out var statsEl))
+                {
+                    lastKnownStatistics = statsEl.Deserialize<StatisticsInfo>();
+                }
+
                 recordCount++;
                 totalBytes += byteCount;
                 Console.WriteLine($"[{timestamp:yyyy-MM-dd HH:mm:ss}] logged (activity: {activity}, {byteCount} bytes, next check in {nextIntervalSeconds}s - {reason}) - " +
@@ -106,6 +134,41 @@ public class TrackingService(ScheduleService schedule, IMowerRepositoryFactory r
         }
 
         Console.WriteLine($"Stopped. {recordCount} records logged, {totalBytes / 1024.0:F1} KB this session. Log file: {logPath}");
+    }
+
+    // Appends a daily statistics snapshot for every fully-completed calendar
+    // day present in the track log but missing from the daily-statistics
+    // log - covers gaps from restarts or extended offline stretches (e.g.
+    // winter storage), which just show up as a gap in the daily table, no
+    // special "season" handling needed. Also returns the in-memory state
+    // RunAsync's live loop needs going forward: the most recent poll's
+    // date/statistics seen so far (null for a brand new mower with no track
+    // log yet), and the latest date already stored (so the live loop never
+    // double-records a day this backfill already caught).
+    private static async Task<(DateOnly? LastKnownDate, StatisticsInfo? LastKnownStatistics, DateOnly? LastStoredDate)> BackfillDailyStatisticsAsync(
+        IMowerRepository repository, CancellationToken cancellationToken)
+    {
+        var history = repository.GetHistory();
+        var stored = repository.GetDailyStatisticsHistory();
+        var lastStoredDate = stored.Count > 0 ? stored.Max(s => s.Date) : (DateOnly?)null;
+
+        var today = DateOnly.FromDateTime(DateTimeOffset.Now.Date);
+        var missingDays = history.Polls
+            .Where(p => p.Statistics is not null)
+            .GroupBy(p => DateOnly.FromDateTime(p.Timestamp.Date))
+            .Where(g => g.Key < today && (lastStoredDate is null || g.Key > lastStoredDate))
+            .OrderBy(g => g.Key);
+
+        foreach (var day in missingDays)
+        {
+            var lastPollOfDay = day.OrderBy(p => p.Timestamp).Last();
+            await repository.AppendDailyStatisticsAsync(new DailyStatisticsSnapshot(day.Key, lastPollOfDay.Statistics!), cancellationToken);
+            lastStoredDate = day.Key;
+        }
+
+        var lastPoll = history.Polls.Count > 0 ? history.Polls.MaxBy(p => p.Timestamp) : null;
+        var lastKnownDate = lastPoll is not null ? DateOnly.FromDateTime(lastPoll.Timestamp.Date) : (DateOnly?)null;
+        return (lastKnownDate, lastPoll?.Statistics, lastStoredDate);
     }
 
     // Reads a mower's track-<mower>.jsonl and summarizes it into sessions: runs
