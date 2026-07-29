@@ -76,6 +76,9 @@ switch (command)
     case "monthly":
         await CommandMonthly(rest);
         break;
+    case "seasons":
+        await CommandSeasons(rest);
+        break;
     case "help":
     case "-h":
     case "--help":
@@ -710,6 +713,61 @@ async Task CommandMonthly(string[] monthlyArgs)
     }
 }
 
+async Task CommandSeasons(string[] seasonArgs)
+{
+    var resolved = await mowerService.ResolveMowerAsync(seasonArgs.FirstOrDefault());
+    if (resolved is null) return;
+    var (_, mowerName) = resolved.Value;
+
+    var daily = mowerRepositoryFactory.ForMower(mowerName).GetDailyStatisticsHistory()
+        .OrderBy(d => d.Date).ToList();
+
+    if (daily.Count == 0)
+    {
+        Console.WriteLine($"No daily statistics recorded yet for {mowerName}. The first snapshot is written once a full calendar day of tracking has passed - run 'track' and check back tomorrow.");
+        return;
+    }
+
+    var seasons = TrackingService.GroupIntoSeasons(daily);
+    Console.WriteLine($"Seasons for {mowerName}, from {daily.Count} recorded day(s) (a gap of {TrackingService.SeasonGapDays}+ days between recorded days starts a new season):");
+
+    for (var i = 0; i < seasons.Count; i++)
+    {
+        var season = seasons[i];
+        var start = season[0];
+        var end = season[^1];
+        var isOngoing = i == seasons.Count - 1;
+
+        Console.WriteLine();
+        Console.WriteLine($"Season {i + 1}: {start.Date:yyyy-MM-dd} to {end.Date:yyyy-MM-dd}{(isOngoing ? " (ongoing)" : "")} - {season.Count} day(s) recorded");
+
+        if (season.Count == 1)
+        {
+            Console.WriteLine("  Only one day recorded so far - no growth to show yet.");
+            continue;
+        }
+
+        var running = end.Statistics.TotalRunningTime - start.Statistics.TotalRunningTime;
+        var cutting = end.Statistics.TotalCuttingTime - start.Statistics.TotalCuttingTime;
+        var charging = end.Statistics.TotalChargingTime - start.Statistics.TotalChargingTime;
+        var cycles = end.Statistics.NumberOfChargingCycles - start.Statistics.NumberOfChargingCycles;
+        var distance = end.Statistics.TotalDriveDistance - start.Statistics.TotalDriveDistance;
+
+        Console.WriteLine($"  Running:         +{FormatLifetimeHours(running)}");
+        Console.WriteLine($"  Cutting:         +{FormatLifetimeHours(cutting)}");
+        Console.WriteLine($"  Charging:        +{FormatLifetimeHours(charging)}");
+        Console.WriteLine($"  Charging cycles: +{cycles:N0}");
+        Console.WriteLine($"  Drive distance:  +{FormatLifetimeDistance(distance)}");
+    }
+}
+
+// Same convention as AutomowerWeb's MowerDisplay.LifetimeDuration/Distance
+// (plain hours with thousands separators, km once >=1000m) - matches how
+// Husqvarna's own app presents these lifetime counters. Duplicated here
+// rather than shared since the CLI project doesn't reference AutomowerWeb.
+string FormatLifetimeHours(long seconds) => $"{Math.Round(TimeSpan.FromSeconds(seconds).TotalHours):N0}h";
+string FormatLifetimeDistance(long meters) => meters >= 1000 ? $"{meters / 1000.0:F1} km" : $"{meters} m";
+
 string DescribeActivity(string activity) => activity switch
 {
     "MOWING" => "Mowing",
@@ -745,7 +803,7 @@ void PrintUsage()
           automower workareas [mower]           Show all work areas (optionally for a specific mower)
           automower workarea <name|id> [mower]  Show detail for one work area (optionally for a specific mower)
           automower stayoutzones [mower]        Show stay-out zones (optionally for a specific mower)
-          automower schedule [mower]            Show the calendar, refresh it in schedule.json, and show
+          automower schedule [mower]            Show the calendar, refresh the cached copy, and show
                                                  the live next calendar/planned start
           automower track [seconds] [mower]     Poll status adaptively and log to a per-mower
                                                  track-<mower>.jsonl: fast (default 60s, [seconds]
@@ -769,6 +827,11 @@ void PrintUsage()
                                                  area that day (repeated per area), then Charging time
                                                  and, if any, Parked (charged but not mowing) time
           automower monthly [mower]              Same as 'daily', one line per calendar month instead
+          automower seasons [mower]              Season-over-season growth in lifetime running/cutting/
+                                                 charging time, charging cycles, and drive distance -
+                                                 from a daily snapshot 'track' writes once per calendar
+                                                 day (see daily statistics log). A gap of 30+ days
+                                                 between recorded days starts a new season.
           automower help                        Show this help
         """);
 }

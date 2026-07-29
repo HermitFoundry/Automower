@@ -401,3 +401,52 @@ public class TrackingServiceAggregateDailyActivityTests
         }
     }
 }
+
+[TestFixture]
+public class TrackingServiceGroupIntoSeasonsTests
+{
+    private static DailyStatisticsSnapshot Day(int year, int month, int day)
+        => new(new DateOnly(year, month, day), new StatisticsInfo());
+
+    [Test]
+    public void EmptyInputProducesNoSeasons()
+    {
+        Assert.That(TrackingService.GroupIntoSeasons([]), Is.Empty);
+    }
+
+    [Test]
+    public void ConsecutiveDaysStayInOneSeason()
+    {
+        var days = new[] { Day(2026, 4, 1), Day(2026, 4, 2), Day(2026, 4, 3) };
+
+        var seasons = TrackingService.GroupIntoSeasons(days);
+
+        Assert.That(seasons, Has.Count.EqualTo(1));
+        Assert.That(seasons[0], Is.EqualTo(days));
+    }
+
+    [Test]
+    public void AGapLongerThanSeasonGapDaysStartsANewSeason()
+    {
+        var lastOfSeasonOne = Day(2026, 4, 10);
+        var firstOfSeasonTwo = lastOfSeasonOne.Date.AddDays(TrackingService.SeasonGapDays + 1);
+        var days = new[] { Day(2026, 4, 1), lastOfSeasonOne, new DailyStatisticsSnapshot(firstOfSeasonTwo, new StatisticsInfo()) };
+
+        var seasons = TrackingService.GroupIntoSeasons(days);
+
+        Assert.That(seasons, Has.Count.EqualTo(2));
+        Assert.That(seasons[0], Is.EqualTo(days[..2]));
+        Assert.That(seasons[1], Is.EqualTo(days[2..]));
+    }
+
+    [Test]
+    public void AGapOfExactlySeasonGapDaysDoesNotStartANewSeason()
+    {
+        var first = Day(2026, 4, 1);
+        var second = new DailyStatisticsSnapshot(first.Date.AddDays(TrackingService.SeasonGapDays), new StatisticsInfo());
+
+        var seasons = TrackingService.GroupIntoSeasons([first, second]);
+
+        Assert.That(seasons, Has.Count.EqualTo(1), "a gap of exactly SeasonGapDays should stay within the same season - only a gap LONGER than that starts a new one");
+    }
+}

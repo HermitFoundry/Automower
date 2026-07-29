@@ -18,6 +18,41 @@ public class TrackingService(ScheduleService schedule, IMowerRepositoryFactory r
     // time into Charging vs. Parked (AggregateActivity/SplitChargerSessions).
     public static bool IsAtCharger(string activity) => activity is "CHARGING" or "PARKED_IN_CS";
 
+    // "Offline more than a month" (the 2026-07-29 discussion's own season-end
+    // signal) between two consecutive recorded days marks a season boundary -
+    // no explicit season start/end bookkeeping needed at write time; a season
+    // is just whatever GroupIntoSeasons produces when asked, from the same
+    // append-only daily-statistics log.
+    public const int SeasonGapDays = 30;
+
+    // Groups a mower's daily statistics history (IMowerRepository.
+    // GetDailyStatisticsHistory) into seasons: runs of consecutive recorded
+    // days with no gap longer than SeasonGapDays between them. Expects
+    // chronologically sorted input; returns each season as its own
+    // chronologically sorted list, oldest season first - a caller wanting
+    // "how much this season" just diffs a season's first and last entries.
+    public static List<List<DailyStatisticsSnapshot>> GroupIntoSeasons(IReadOnlyList<DailyStatisticsSnapshot> chronological)
+    {
+        var seasons = new List<List<DailyStatisticsSnapshot>>();
+        if (chronological.Count == 0)
+        {
+            return seasons;
+        }
+
+        var current = new List<DailyStatisticsSnapshot> { chronological[0] };
+        for (var i = 1; i < chronological.Count; i++)
+        {
+            if (chronological[i].Date.DayNumber - chronological[i - 1].Date.DayNumber > SeasonGapDays)
+            {
+                seasons.Add(current);
+                current = [];
+            }
+            current.Add(chronological[i]);
+        }
+        seasons.Add(current);
+        return seasons;
+    }
+
     public async Task RunAsync(string mowerId, string mowerName, Config config, int activeIntervalSeconds, CancellationToken cancellationToken)
     {
         var connect = AutomowerConnect.Instance;
