@@ -753,12 +753,14 @@ async Task CommandSeasons(string[] seasonArgs)
         var running = end.Statistics.TotalRunningTime - start.Statistics.TotalRunningTime;
         var cutting = end.Statistics.TotalCuttingTime - start.Statistics.TotalCuttingTime;
         var charging = end.Statistics.TotalChargingTime - start.Statistics.TotalChargingTime;
+        var bladeUsage = end.Statistics.CuttingBladeUsageTime - start.Statistics.CuttingBladeUsageTime;
         var cycles = end.Statistics.NumberOfChargingCycles - start.Statistics.NumberOfChargingCycles;
         var distance = end.Statistics.TotalDriveDistance - start.Statistics.TotalDriveDistance;
 
         Console.WriteLine($"  Running:         +{FormatLifetimeHours(running)}");
         Console.WriteLine($"  Cutting:         +{FormatLifetimeHours(cutting)}");
         Console.WriteLine($"  Charging:        +{FormatLifetimeHours(charging)}");
+        Console.WriteLine($"  Blade usage:     +{FormatLifetimeHours(bladeUsage)}");
         Console.WriteLine($"  Charging cycles: +{cycles:N0}");
         Console.WriteLine($"  Drive distance:  +{FormatLifetimeDistance(distance)}");
     }

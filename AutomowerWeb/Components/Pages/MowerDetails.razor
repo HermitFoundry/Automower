@@ -330,6 +330,8 @@ else if (_detail is not null && _stored is not null)
                         <dd>+@MowerDisplay.LifetimeDuration(end.Statistics.TotalCuttingTime - start.Statistics.TotalCuttingTime)</dd>
                         <dt>Charging</dt>
                         <dd>+@MowerDisplay.LifetimeDuration(end.Statistics.TotalChargingTime - start.Statistics.TotalChargingTime)</dd>
+                        <dt>Blade usage</dt>
+                        <dd>+@MowerDisplay.LifetimeDuration(end.Statistics.CuttingBladeUsageTime - start.Statistics.CuttingBladeUsageTime)</dd>
                         <dt>Charging cycles</dt>
                         <dd>+@(end.Statistics.NumberOfChargingCycles - start.Statistics.NumberOfChargingCycles)</dd>
                         <dt>Drive distance</dt>
