@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Starts one detached tmux session per mower on this account, each running
-# 'track' for that mower - see README's "Running track unattended" section
-# for why tmux (survives SSH/docker exec disconnects) and why per-mower
-# sessions (track only handles one mower per process).
+# 'hybrid-track' for that mower (WebSocket events for live status, a slow
+# REST refresh for statistics/schedule - see docs/database-schema.md and
+# the 2026-07-30 SQLite-migration/hybrid-tracking work; replaces the old
+# pure-REST 'track' as of that cutover) - see README's "Running track
+# unattended" section for why tmux (survives SSH/docker exec disconnects)
+# and why per-mower sessions (one process handles one mower).
 #
 # Builds once, up front, and each tmux session runs the built .dll directly
 # rather than going through am.sh - am.sh runs 'dotnet build' on every
@@ -48,12 +51,14 @@ fi
 dll="$dir/AutomowerConsole/bin/Debug/net10.0/AutomowerConsole.dll"
 dotnet build "$dir/AutomowerConsole/AutomowerConsole.csproj" -v quiet
 
-if [ ! -f .data/mowers.json ]; then
-    echo "No cached mower list found - fetching..."
-    dotnet "$dll" list
-fi
-
-mapfile -t names < <(grep -o '"Name": *"[^"]*"' .data/mowers.json | sed -E 's/"Name": *"([^"]*)"/\1/')
+# 'list' itself (not a cached mowers.json file) - as of the 2026-07-30
+# SQLite cutover, the mower registry lives in .data/common.db, not a JSON
+# file this script could grep directly. 'list' always does one live API
+# fetch (CommandList -> RefreshMowersAsync, unconditional) - one extra call
+# per startall.sh run versus before (when an existing mowers.json avoided
+# it entirely), but this script only runs rarely/by hand, not in a hot
+# path, so the cost is negligible.
+mapfile -t names < <(dotnet "$dll" list | sed -n 's/^ *\[[0-9]*\] \(.*\) (model:.*/\1/p')
 
 if [ ${#names[@]} -eq 0 ]; then
     echo "No mowers found in .data/mowers.json - run './am.sh list' first." >&2
@@ -93,8 +98,8 @@ for name in "${names[@]}"; do
     # would also change what a *clean* stop looks like, breaking stopall.sh's
     # "closes itself within 3s" detection for a graceful Ctrl+C stop.
     log="$dir/.data/startall-$short.log"
-    tmux new-session -d -c "$dir" -s "$session" bash -c "dotnet '$dll' track '$short' > '$log' 2>&1"
-    echo "  started $session (track $short, log: $log)"
+    tmux new-session -d -c "$dir" -s "$session" bash -c "dotnet '$dll' hybrid-track '$short' > '$log' 2>&1"
+    echo "  started $session (hybrid-track $short, log: $log)"
 done
 
 echo "Done. 'tmux ls' to see them; 'tmux attach -t <name>' to check on one; ./stopall.sh to stop them all."

@@ -29,11 +29,10 @@ builder.Services.AddAntiforgery(options =>
     options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
 });
 
-// Storage seam (see the 2026-07-29 SQLite-migration discussion) - JSONL-
-// backed for now, swappable for a SQLite-backed implementation later without
-// touching any of the services below.
-builder.Services.AddSingleton<IMowerRepositoryFactory, JsonlMowerRepositoryFactory>();
-builder.Services.AddSingleton<IMowerRegistry, JsonlMowerRegistry>();
+// Storage seam (see the 2026-07-29/30 SQLite-migration + hybrid-tracking
+// work) - SQLite-backed as of the 2026-07-30 cutover.
+builder.Services.AddSingleton<IMowerRepositoryFactory, SqliteMowerRepositoryFactory>();
+builder.Services.AddSingleton<IMowerRegistry, SqliteMowerRegistry>();
 
 // Same services the CLI uses, same singleton-per-run pattern (see
 // Program.cs in AutomowerConsole) - cheap, effectively-stateless wrappers

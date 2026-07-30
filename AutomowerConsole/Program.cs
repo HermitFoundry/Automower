@@ -18,8 +18,8 @@ Config? cachedConfig = null;
 // (and therefore never read config.json) until a method body that actually
 // needs the API runs. help/config/errorcodes/current rely on that to keep
 // working with no config.json at all.
-var mowerRepositoryFactory = new JsonlMowerRepositoryFactory();
-var mowerRegistry = new JsonlMowerRegistry();
+var mowerRepositoryFactory = new SqliteMowerRepositoryFactory();
+var mowerRegistry = new SqliteMowerRegistry();
 var mowerService = new MowerService(mowerRegistry);
 var mowerDetailService = new MowerDetailService();
 var scheduleService = new ScheduleService(mowerRepositoryFactory);
