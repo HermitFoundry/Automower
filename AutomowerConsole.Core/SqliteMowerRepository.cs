@@ -201,12 +201,23 @@ public class SqliteMowerRepository(string mowerName) : IMowerRepository
         double? latitude = null;
         double? longitude = null;
         StatisticsInfo? statistics = null;
+        var workAreaIdObservedAt = DateTimeOffset.MinValue;
 
         foreach (var row in rows)
         {
             activity ??= "UNKNOWN";
+            var rowTimestamp = DateTimeOffset.Parse(row.Timestamp);
             if (row.Activity is not null) activity = row.Activity;
-            if (row.WorkAreaId is not null) workAreaId = row.WorkAreaId.Value;
+            if (row.WorkAreaId is not null)
+            {
+                workAreaId = row.WorkAreaId.Value;
+                // Only this row's own observation - not the position/battery/
+                // planner fields also possibly set on it - actually confirms
+                // WorkAreaId as of rowTimestamp. See PollRecord's own comment
+                // for why this can't just be rowTimestamp unconditionally,
+                // the way it can for a REST row.
+                workAreaIdObservedAt = rowTimestamp;
+            }
             if (row.BatteryPercent is not null) battery = row.BatteryPercent.Value;
             if (row.PlannerNextStartTimestamp is not null) plannerNextStart = row.PlannerNextStartTimestamp.Value;
             if (row.Latitude is not null) latitude = row.Latitude;
@@ -221,7 +232,7 @@ public class SqliteMowerRepository(string mowerName) : IMowerRepository
             }
 
             polls.Add(new PollRecord(
-                DateTimeOffset.Parse(row.Timestamp), activity, battery, workAreaId, plannerNextStart, latitude, longitude, statistics));
+                rowTimestamp, activity, battery, workAreaId, plannerNextStart, latitude, longitude, statistics, workAreaIdObservedAt));
         }
 
         var workAreaNames = new Dictionary<long, string>();

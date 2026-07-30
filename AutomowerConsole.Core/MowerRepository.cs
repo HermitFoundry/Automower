@@ -9,6 +9,18 @@ namespace AutomowerConsole.Core;
 // and shared. Latitude/Longitude come from positions[0] only (the newest
 // breadcrumb) - see JsonlMowerRepository.GetHistory() for why the rest of
 // that poll's up-to-50-entry array is deliberately not surfaced here.
+//
+// WorkAreaIdObservedAt is the timestamp of whichever observation last
+// actually set WorkAreaId - equal to Timestamp itself for a REST-sourced
+// poll (a REST response is always one atomic snapshot, so WorkAreaId and
+// Latitude/Longitude are always in sync by construction), but can trail
+// Timestamp for a hybrid-tracked, WebSocket-event-sourced poll: a
+// position-event-v2 row's own WorkAreaId is necessarily carried forward
+// from whatever the last mower-event-v2 said, since no single event
+// carries both a position and a work area together. CoverageService uses
+// this to avoid pairing a fresh GPS fix with a stale, carried-forward
+// WorkAreaId - see its own comment for why that pairing used to be safe to
+// assume (under REST-only polling) and no longer is.
 public record PollRecord(
     DateTimeOffset Timestamp,
     string Activity,
@@ -17,7 +29,8 @@ public record PollRecord(
     long PlannerNextStartTimestamp,
     double? Latitude,
     double? Longitude,
-    StatisticsInfo? Statistics);
+    StatisticsInfo? Statistics,
+    DateTimeOffset WorkAreaIdObservedAt);
 
 // One calendar day's end-of-day snapshot of the mower's lifetime usage
 // counters (StatisticsInfo - cumulative since setup, not a daily delta) -
@@ -253,7 +266,7 @@ public class JsonlMowerRepository(string mowerName) : IMowerRepository
 
                 var (activity, workAreaId, battery, plannerNextStart, latitude, longitude, statistics) =
                     RestSnapshotParser.ParsePollFields(attributes);
-                polls.Add(new PollRecord(timestamp, activity, battery, workAreaId, plannerNextStart, latitude, longitude, statistics));
+                polls.Add(new PollRecord(timestamp, activity, battery, workAreaId, plannerNextStart, latitude, longitude, statistics, timestamp));
 
                 RestSnapshotParser.AccumulateWorkAreaNames(attributes, workAreaNames);
                 if (RestSnapshotParser.TryGetNonEmptyCalendarTasks(attributes) is { } calendarTasks)
