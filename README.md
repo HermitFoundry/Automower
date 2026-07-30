@@ -1,242 +1,123 @@
-# AutomowerConsole
+# Automower
 
-A small C# console client for the Husqvarna Automower Connect API. Authenticates
-with an app key/secret via OAuth2 client-credentials, then lets you inspect
-mower status, messages, work areas, stay-out zones, and schedules, plus an
-adaptive polling/logging mode (`track`).
+A home automation project for a Husqvarna Automower account: a public,
+read-only web dashboard, a CLI, a WebSocket-event-driven tracker, and a
+SQLite-backed history store, all running unattended on a QNAP NAS. What
+started as a small console client for the Husqvarna Automower Connect API
+has grown into a small system — this section is the map; everything else
+lives in short sections below with links to the full detail in `docs/`.
 
-## Prerequisites
+## What this is
 
-- .NET 10 SDK
-- A Husqvarna Developer Portal application (https://developer.husqvarnagroup.cloud/)
-  subscribed to both the **Authentication API** and the **Automower Connect API**,
-  giving you an application (app) key and secret
-- On a fresh Linux container/host (e.g. a new QNAP Container Station
-  container): `git`, `curl`, `tmux` (for `startall.sh`/`stopall.sh`), and the
-  system timezone set to match the mowers' own configured local time (not
-  the container default, often UTC — see
-  [`docs/tracking.md`](docs/tracking.md) for why this matters). Run
-  `./bootstrap.sh` as root to install all of the above plus the .NET SDK in
-  one idempotent pass.
+- **[`AutomowerWeb`](#web-dashboard-automowerweb)** — a public, read-only
+  Blazor Server dashboard: live status for every mower, per-mower history,
+  work areas, schedule, and lifetime statistics. This is what you'd point a
+  browser at.
+- **`AutomowerConsole`** — the CLI (`am.cmd`/`am.sh`) for everything the
+  dashboard doesn't cover: setting config, one-off status checks, and
+  starting the trackers. See [`docs/cli-usage.md`](docs/cli-usage.md).
+- **`hybrid-track`** — the default tracker: subscribes to Husqvarna's
+  WebSocket event-push API for near-instant status changes, with a slow
+  REST-refresh loop underneath for the statistics/schedule fields events
+  don't carry. Runs continuously, one process per mower.
+- **SQLite storage** — every mower gets its own database (raw event log +
+  a derived, queryable history), plus one shared database for the mower
+  registry. See [`docs/database-schema.md`](docs/database-schema.md).
+- **`AutomowerConsole.Core`** — the shared domain/service layer both the
+  CLI and the web app sit on top of. See [`docs/design.md`](docs/design.md).
 
-## Setup
-
-1. Build once to restore/compile:
-
-   ```
-   dotnet build
-   ```
-
-2. Set your credentials with the `config` command (creates `.config/config.json`
-   if it doesn't exist yet):
-
-   ```
-   dotnet run -- config AppKey=your-app-key AppSecret=your-app-secret
-   ```
-
-   `config` also accepts any other config field the same way (see
-   [`docs/tracking.md`](docs/tracking.md) for the full list, e.g.
-   `IdleIntervalSeconds=240`). Run `dotnet run -- config` with no arguments to
-   print the current values (secrets masked). `config.example.json` (repo
-   root, tracked) documents the full field set as a reference.
-
-   The config file lives in `.config/config.json`, and `list`/`use`/`track`
-   generate state in `.data/` — both are resolved relative to the repo root
-   (found by walking up from the built executable to the nearest `.slnx`),
-   not the `bin/` build output folder, so `dotnet clean` never touches them.
-   Both directories are gitignored — keep it that way (see **Security note**).
-   `AutomowerWeb` (see **Web dashboard**) reads the same two directories, so
-   it needs to run somewhere that can see them too.
-
-## Running
-
-Either:
-
-```
-dotnet run -- <command> [args]
-```
-
-or use the shortcut for your platform, which builds once and then runs the
-compiled binary directly:
-
-```
-am.cmd <command> [args]        # Windows
-./am.sh <command> [args]       # Linux/macOS
-```
-
-On Linux/macOS, `am.sh`/`startall.sh`/`stopall.sh`/`bootstrap.sh` need the
-executable bit, which git now tracks directly (`git update-index --chmod=+x`
-was applied and committed) — a fresh `git clone` on Linux gets it for free.
-If an *existing* checkout still loses it after a pull (some git configs,
-e.g. `core.fileMode=false`, won't restore local bits from the index), run
-`./fix-permissions.sh` to reset all of this repo's `*.sh` scripts at once,
-or `chmod +x am.sh` for just the one. If you'd rather not chmod anything,
-`bash am.sh <command>` works too without it.
-
-**Use the shortcuts, not `dotnet run`, for `track`.** `dotnet run` is a
-build-and-launch wrapper, and it does not reliably forward POSIX signals
-(SIGINT/Ctrl+C) to the process it spawns — a `track` session started with
-`dotnet run` can't be stopped cleanly with Ctrl+C or `kill -INT`; only
-`kill -9` gets through, and you lose the graceful summary (log data is still
-safe either way, since every poll is flushed to disk immediately). `am.cmd`/
-`am.sh` avoid this by launching the built `.dll` directly — no wrapper
-process in between.
-
-## Commands
-
-Commands that act on "the active mower" (the one set via `use`) accept an
-optional trailing `[mower]` argument — a name, id, or list index — to target
-a different mower for just that one call, without changing the active
-selection.
-
-| Command | Description |
-|---|---|
-| `config` | Show current config values (secrets masked) |
-| `config Key=Value ...` | Set one or more config values, e.g. `config AppKey=xxx AppSecret=yyy` |
-| `list` | Fetch and list all mowers on the account, save to the mower registry (`.data/common.db`) |
-| `use <name\|id\|index>` | Set the active mower (stored in `.data/state.json`) |
-| `current` | Show the currently active mower |
-| `status [--all] [mower]` | Show current status; `--all` dumps the full raw JSON payload |
-| `messages [mower]` | Show message/error history, newest first, with human-readable descriptions |
-| `errorcodes` | Show the full error code → description table |
-| `workareas [mower]` | List all work areas |
-| `workarea <name\|id> [mower]` | Detailed info for one work area, including its schedule |
-| `stayoutzones [mower]` | List configured stay-out zones |
-| `schedule [mower]` | Show the calendar, refresh the cached per-mower schedule, and show the live next calendar/planned start |
-| `hybrid-track [mower]` | **Default tracker** (what `startall.sh` runs) - WebSocket events drive live status with near-instant precision, a slow REST refresh keeps statistics/schedule current. Logs to `.data/mower-<name>.db` (see [`docs/database-schema.md`](docs/database-schema.md)) |
-| `track [seconds] [mower]` | The original adaptive-interval REST-only poller (see [`docs/tracking.md`](docs/tracking.md)) - still available, also logs to `.data/mower-<name>.db` now, just without event-driven precision |
-| `sessions [--calendar] [mower]` | Summarize a mower's history into one line per mowing/charging/etc. session |
-| `daily [mower]` | One line per calendar day: total Mowing time per work area, then Charging and Parked time |
-| `seasons [mower]` | Season-over-season growth in lifetime running/cutting/charging time, charging cycles, blade usage, and drive distance |
-| `baseline <YYYY-MM-DD> [mower]` | Seed an all-zero daily-statistics record on a past date (e.g. a mower's purchase date) so `seasons` has a real day-zero to diff against |
-| `migrate-to-sqlite [mower]` | One-time dev tool: migrates a mower's old JSONL-backed history into SQLite (already run for all 3 mowers as of the 2026-07-30 cutover) |
-| `help` | Show usage |
-
-### Examples
-
-```
-am list
-am use "AM430X NERA"
-am status
-am status "AM405X"          # check a different mower without switching active
-am workarea nederside
-am messages
-am track                    # start adaptive polling for the active mower
-```
-
-## `hybrid-track`, `track`, `sessions`, `daily`, `seasons`
-
-`hybrid-track` (what `startall.sh` runs) and the original `track` both log
-each mower's history to its own SQLite db (`.data/mower-<name>.db` - see
-[`docs/database-schema.md`](docs/database-schema.md)); `sessions`/`daily`
-summarize that history; `seasons`/`baseline` track season-over-season
-lifetime-statistics growth. Adaptive polling intervals, the event-driven
-design, the `calendar` vs `planner` distinction, and running trackers
-unattended (tmux, `startall.sh`/`stopall.sh`) are all covered in
-**[`docs/tracking.md`](docs/tracking.md)**.
-
-## Config and generated files
-
-Both live in the repo root, resolved at runtime by walking up from the built
-executable to the nearest `.csproj` — not `bin/`, so a `dotnet clean` (which
-wipes `bin/`/`obj/`) never touches either of them. Both are gitignored.
-
-| Path | Contents |
-|---|---|
-| `.config/config.json` | App key/secret + `track`/`hybrid-track` interval settings (via `config`) |
-| `.data/state.json` | The active mower selection (from `use`) - unaffected by the SQLite migration, still a plain file |
-| `.data/common.db` | Mower registry (from `list`) - see [`docs/database-schema.md`](docs/database-schema.md) |
-| `.data/mower-<mower name>.db` | One SQLite db per mower - raw + derived history, cached schedule, daily statistics. See [`docs/database-schema.md`](docs/database-schema.md) for the full schema |
-
-**Legacy JSONL files** (`.data/mowers.json`, `.data/schedule-<mower>.json`,
-`.data/track-<mower>.jsonl`, `.data/events-<mower>.jsonl`,
-`.data/statistics-<mower>.jsonl`) predate the 2026-07-30 SQLite cutover -
-kept on disk as a historical record, but nothing reads or writes them
-anymore.
-
-## Security note
-
-`.config/config.json` contains your Husqvarna app key and secret in plain
-text. It's already gitignored — don't remove that entry, and don't commit
-the file directly. `config.example.json` (repo root, tracked) is the
-placeholder template to copy from if you ever need to recreate it by hand;
-`config AppKey=... AppSecret=...` does the same thing without manual editing.
-
-## Project layout
-
-Four projects under `automower.slnx`: a shared library, the CLI, its tests,
-and a web dashboard — the CLI and the web app are two independent
-presentation layers over the same domain/service code, not one depending on
-the other.
-
-- **`AutomowerConsole.Core/`** — the shared domain/service layer. Everything
-  in here is what used to live directly in `AutomowerConsole/` before the
-  CLI and `AutomowerWeb` both needed it; `public` is a real API boundary
-  here now, not the `internal` + `InternalsVisibleTo` pattern still used
-  for test-only access:
-  - `MowerService.cs` — mower listing, caching, and name/id/index resolution
-  - `MowerDetailService.cs` — fetching a specific mower's live status,
-    messages, and work area detail
-  - `ScheduleService.cs` — calendar/schedule calculations and the schedule
-    cache
-  - `TrackingService.cs` — the `track` polling loop and `sessions`/`daily`
-    log summarization
-  - `ErrorCodes.cs`, `Extensions.cs` (`FormatDuration`, `IsNighttime`) — small
-    public helpers both consumers use for display
-  - `AutomowerConnect.cs` / `HusqvarnaClient.cs` — auth + raw HTTP calls,
-    deliberately kept `internal` to Core — nothing outside Core, in either
-    the CLI or the web app, should reach the API directly; go through the
-    services above instead
-  - `Storage.cs` — reads/writes `.config/config.json` and `.data/*.json(l)`,
-    and finds the repo root (nearest `.slnx`, not `.csproj` — there's only
-    ever one, and it stays in the true repo root regardless of how many
-    projects sit under it) that they're anchored to. `public`, unlike the
-    other internals above, since the CLI's own config/state commands
-    (`config`, `use`, `current`) call it directly with no service layer of
-    their own
-  - `Models.cs` — JSON response models and config/cache record types (the
-    pure wire-DTOs the API's JSON unwraps into stay `internal`; the actual
-    domain types services return are `public`)
-- **`AutomowerConsole/`** — the CLI. Just `Program.cs` now: argument
-  parsing and result printing on top of `AutomowerConsole.Core`'s services
-- **`AutomowerConsole.Tests/`** — NUnit tests, referencing
-  `AutomowerConsole.Core` directly (it's what they've always actually
-  tested — `TrackingService`, etc.)
-- **`AutomowerWeb/`** — the Blazor web dashboard, see **Web dashboard**
-  below
-- `am.cmd` / `am.sh` — shortcuts that build `AutomowerConsole.csproj` once
-  and then run the compiled `.dll` directly (not `dotnet run` — see above)
-- `startall.sh` / `stopall.sh` — start/stop one tmux `track` session per
-  mower (see [`docs/tracking.md`](docs/tracking.md))
-- `startweb.sh` / `stopweb.sh` — start/stop `AutomowerWeb` in a detached
-  tmux session (see **Web dashboard** below)
-- `bootstrap.sh` / `fix-permissions.sh` — one-time container provisioning
-  and the `chmod +x` fallback (see **Prerequisites**/**Running** above)
-- `automower.slnx` — the solution file referencing all four projects
-
-Run the tests with `dotnet test`.
+All four mower-facing pieces (`AutomowerWeb` and 3 `hybrid-track` daemons,
+one per mower) run as separate long-lived processes on a QNAP NAS — see
+**Deployment** below.
 
 ## Web dashboard (`AutomowerWeb`)
 
-A read-only Blazor Server app: a `/` dashboard (live status per mower) and
-a `/mower/{name}` details page per mower (full session history, work
-areas, schedule, lifetime statistics, seasons, and more). Run locally with
-`dotnet run --project AutomowerWeb` (default `http://localhost:5152`).
-Full details — QNAP deployment via `startweb.sh`, dev mode, the
-no-auto-refresh design decision — in
-**[`docs/web-dashboard.md`](docs/web-dashboard.md)**.
+A read-only Blazor Server app: a `/` dashboard (live status per mower —
+activity, battery, work area, connected, next start, location, weather —
+plus that mower's sessions from *today only* and a 7-day rollup) and a
+`/mower/{name}` details page per mower (the same status facts up top, plus
+full session history, daily rollup, work areas, stay-out zones, schedule,
+recent messages, settings/capabilities, and lifetime operation statistics
+at the bottom). No login, and deliberately no mower control anywhere in it
+— an unauthenticated public control surface for a physical outdoor device
+is a different risk class than an unauthenticated read-only dashboard, and
+hasn't been asked for.
 
-## Documentation
+**Location and weather** are derived from each mower's own latest GPS
+position, via two free, keyless external services called server-side:
+OpenStreetMap's **Nominatim** for reverse geocoding and **Open-Meteo** for
+current weather. `AutomowerWeb` needs outbound internet access to those two
+hosts in addition to Husqvarna's own API.
 
-This README covers local setup and day-to-day CLI usage. Deeper/deployment
-topics live in `docs/`:
+Run it locally from the repo root, so it can see `.config`/`.data`:
+
+```
+dotnet run --project AutomowerWeb
+```
+
+then open the URL it prints (default `http://localhost:5152`). On the QNAP
+deployment it runs via `./startweb.sh` in a detached tmux session instead —
+see [`docs/web-dashboard.md`](docs/web-dashboard.md) for that, dev mode
+(`startweb.dev`), why there's no auto-refresh timer, and the external
+service caching behavior.
+
+## CLI
+
+Everything the dashboard doesn't cover — setting up credentials, one-off
+status/message/schedule checks, and starting a tracker by hand — goes
+through the CLI: `am.cmd <command>` (Windows) / `./am.sh <command>`
+(Linux/macOS), or `dotnet run -- <command>` directly. See
+**[`docs/cli-usage.md`](docs/cli-usage.md)** for the full command
+reference and examples.
+
+## Installation / setup
+
+Needs the .NET 10 SDK and a Husqvarna Developer Portal app key/secret; a
+`./bootstrap.sh` script provisions a fresh Linux container end-to-end. See
+**[`docs/installation.md`](docs/installation.md)** for prerequisites and
+first-run setup (`dotnet build`, then `config AppKey=... AppSecret=...`).
+
+## Design
+
+Four projects under `automower.slnx` — a shared domain/service layer
+(`AutomowerConsole.Core`), the CLI, its tests, and the web app — plus the
+SQLite storage architecture (per-mower raw-event + derived-observation
+databases) behind the `IMowerRepository` abstraction. See
+**[`docs/design.md`](docs/design.md)** for the full project layout and
+storage design.
+
+## Configuration / reference
+
+Where config and generated data live (`.config/config.json`, the per-mower
+and common SQLite databases under `.data/`), and the security note on the
+gitignored credentials file. See
+**[`docs/configuration.md`](docs/configuration.md)**.
+
+## Deployment
+
+Runs unattended on a QNAP TS-673A NAS: one container running the 3
+`hybrid-track` daemons in tmux, a separate container for `AutomowerWeb`,
+and a Caddy container fronting it with automatic TLS for the public
+dashboard at `https://Terje-TS673A.myqnapcloud.com/`. See
+**[`docs/deployment.md`](docs/deployment.md)** for the public deployment
+architecture, and **[`docs/qnap-access.md`](docs/qnap-access.md)** /
+**[`.claude/skills/qnap-ops/SKILL.md`](.claude/skills/qnap-ops/SKILL.md)**
+for getting a shell on the containers and redeploying.
+
+## Documentation index
 
 | Doc | Covers |
 |---|---|
-| [`docs/tracking.md`](docs/tracking.md) | `track` polling intervals, `sessions`/`daily`/`seasons`, `calendar` vs `planner`, running `track` unattended |
-| [`docs/web-dashboard.md`](docs/web-dashboard.md) | `AutomowerWeb` — pages, external services, running it locally and on the QNAP container |
+| [`docs/installation.md`](docs/installation.md) | Prerequisites, first-run setup |
+| [`docs/cli-usage.md`](docs/cli-usage.md) | Full CLI command reference and examples |
+| [`docs/web-dashboard.md`](docs/web-dashboard.md) | `AutomowerWeb` deep dive — external services, dev mode, QNAP tmux operation |
+| [`docs/design.md`](docs/design.md) | Project layout, service breakdown, storage architecture |
+| [`docs/configuration.md`](docs/configuration.md) | Config/generated file locations, security note |
+| [`docs/tracking.md`](docs/tracking.md) | `hybrid-track`/`track` polling & event design, `sessions`/`daily`/`seasons`, `calendar` vs `planner`, running unattended |
 | [`docs/database-schema.md`](docs/database-schema.md) | SQLite storage backend schema (mermaid ER diagrams) |
 | [`docs/deployment.md`](docs/deployment.md) | Public deployment architecture (Caddy, TLS, hostname, no-auth decision) |
 | [`docs/qnap-access.md`](docs/qnap-access.md) | Getting a shell on the QNAP container over SSH, SSH-tunnel testing |
 | [`docs/qnap_infrastructure_setup.md`](docs/qnap_infrastructure_setup.md) | Deeper QNAP/Container Station operational notes (timezone, port mapping, SSH forwarding) |
 | [`.claude/skills/automower-api/SKILL.md`](.claude/skills/automower-api/SKILL.md) | API implementation notes — auth flow, endpoint quirks, timestamp units, WebSocket research |
+| [`.claude/skills/qnap-ops/SKILL.md`](.claude/skills/qnap-ops/SKILL.md) | QNAP operational playbook — SSH/docker patterns, redeploy commands |
+| [`.claude/plans/sqlite-and-hybrid-tracking-migration.md`](.claude/plans/sqlite-and-hybrid-tracking-migration.md) | Archived plan for the SQLite + hybrid-tracking migration and 2026-07-30 cutover |
