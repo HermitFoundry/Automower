@@ -25,6 +25,7 @@ var mowerDetailService = new MowerDetailService();
 var scheduleService = new ScheduleService(mowerRepositoryFactory);
 var trackingService = new TrackingService(scheduleService, mowerRepositoryFactory);
 var eventTrackingService = new EventTrackingService(mowerRepositoryFactory);
+var hybridTrackingService = new HybridTrackingService(scheduleService, mowerRepositoryFactory);
 
 switch (command)
 {
@@ -60,6 +61,9 @@ switch (command)
         break;
     case "eventtracking":
         await CommandEventTracking(rest);
+        break;
+    case "hybrid-track":
+        await CommandHybridTrack(rest);
         break;
     case "config":
         CommandConfig(rest);
@@ -541,6 +545,24 @@ async Task CommandEventTracking(string[] eventArgs)
     await eventTrackingService.RunAsync(mowerId, mowerName, cts.Token);
 }
 
+async Task CommandHybridTrack(string[] hybridArgs)
+{
+    var resolved = await mowerService.ResolveMowerAsync(hybridArgs.FirstOrDefault());
+    if (resolved is null) return;
+    var (mowerId, mowerName) = resolved.Value;
+
+    var config = GetConfig();
+
+    using var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        cts.Cancel();
+    };
+
+    await hybridTrackingService.RunAsync(mowerId, mowerName, config, cts.Token);
+}
+
 async Task CommandSchedule(string[] scheduleArgs)
 {
     var resolved = await mowerService.ResolveMowerAsync(scheduleArgs.FirstOrDefault());
@@ -960,6 +982,12 @@ void PrintUsage()
                                                  event-push API and logs every event received for one
                                                  mower to events-<mower>.jsonl, instead of polling.
                                                  Reconnects automatically. Ctrl+C to stop.
+          automower hybrid-track [mower]        Experimental (SQLite-backed repositories only):
+                                                 WebSocket events drive live status with near-instant
+                                                 precision; a much slower REST refresh (config
+                                                 RestRefreshIntervalSeconds, default 900s) keeps
+                                                 statistics/schedule current. Reconnects automatically.
+                                                 Ctrl+C to stop.
           automower sessions [--calendar] [mower]
                                                  Summarize track-<mower>.jsonl into one line per
                                                  mowing/charging/etc. session (split on activity or

@@ -17,6 +17,13 @@ public record Config
     // No manual mowing start is expected in this window.
     public int NightStartHour { get; init; } = 22;
     public int NightEndHour { get; init; } = 8;
+
+    // 'hybrid-track's REST-refresh cadence, in seconds - purely to keep
+    // statistics (for daily-statistics/seasons) and the cached schedule
+    // fresh, since WebSocket events never carry either. Far slower than
+    // 'track's own polling intervals above is fine - nothing downstream
+    // needs sub-15-minute freshness for either.
+    public int RestRefreshIntervalSeconds { get; init; } = 900;
 }
 
 // Wire DTOs below (TokenResponse through WorkAreaResourceData) stay internal

@@ -139,22 +139,9 @@ public class TrackingService(ScheduleService schedule, IMowerRepositoryFactory r
                 var byteCount = Encoding.UTF8.GetByteCount(raw);
                 await repository.RecordAsync(timestamp, "rest", raw, cancellationToken);
 
-                // Rolled over to a new calendar day since the last poll we
-                // saw - record yesterday's end-of-day snapshot now, using the
-                // last statistics actually observed for it (not this poll's,
-                // which already belongs to today).
-                var today = DateOnly.FromDateTime(timestamp.Date);
-                if (lastKnownDate is { } previousDate && previousDate < today && lastKnownStatistics is not null &&
-                    (lastStoredStatisticsDate is null || lastStoredStatisticsDate < previousDate))
-                {
-                    await repository.AppendDailyStatisticsAsync(new DailyStatisticsSnapshot(previousDate, lastKnownStatistics), cancellationToken);
-                    lastStoredStatisticsDate = previousDate;
-                }
-                lastKnownDate = today;
-                if (attributes.TryGetProperty("statistics", out var statsEl))
-                {
-                    lastKnownStatistics = statsEl.Deserialize<StatisticsInfo>();
-                }
+                var newStatistics = attributes.TryGetProperty("statistics", out var statsEl) ? statsEl.Deserialize<StatisticsInfo>() : null;
+                (lastKnownDate, lastKnownStatistics, lastStoredStatisticsDate) = await CheckDayRolloverAsync(
+                    repository, lastKnownDate, lastKnownStatistics, lastStoredStatisticsDate, timestamp, newStatistics, cancellationToken);
 
                 recordCount++;
                 totalBytes += byteCount;
@@ -192,7 +179,10 @@ public class TrackingService(ScheduleService schedule, IMowerRepositoryFactory r
     // date/statistics seen so far (null for a brand new mower with no track
     // log yet), and the latest date already stored (so the live loop never
     // double-records a day this backfill already caught).
-    private static async Task<(DateOnly? LastKnownDate, StatisticsInfo? LastKnownStatistics, DateOnly? LastStoredDate)> BackfillDailyStatisticsAsync(
+    // internal, not private - HybridTrackingService's REST-refresh loop
+    // (Part 2 of the 2026-07-30 plan) needs the same startup catch-up
+    // RunAsync itself uses.
+    internal static async Task<(DateOnly? LastKnownDate, StatisticsInfo? LastKnownStatistics, DateOnly? LastStoredDate)> BackfillDailyStatisticsAsync(
         IMowerRepository repository, CancellationToken cancellationToken)
     {
         var history = repository.GetHistory();
@@ -216,6 +206,32 @@ public class TrackingService(ScheduleService schedule, IMowerRepositoryFactory r
         var lastPoll = history.Polls.Count > 0 ? history.Polls.MaxBy(p => p.Timestamp) : null;
         var lastKnownDate = lastPoll is not null ? DateOnly.FromDateTime(lastPoll.Timestamp.Date) : (DateOnly?)null;
         return (lastKnownDate, lastPoll?.Statistics, lastStoredDate);
+    }
+
+    // Given the (lastKnownDate, lastKnownStatistics, lastStoredStatisticsDate)
+    // state BackfillDailyStatisticsAsync seeds at startup, checks whether a
+    // newly-arrived (timestamp, statistics) pair means the calendar day has
+    // rolled over since the last one seen - if so, records yesterday's
+    // end-of-day snapshot now, using the *last* statistics actually observed
+    // for it (not newStatistics, which already belongs to the new day).
+    // Shared between RunAsync's own poll loop and HybridTrackingService's
+    // REST-refresh loop (Part 2 of the 2026-07-30 plan) - the day-rollover
+    // check doesn't care how often it's called, only that it's called with
+    // each new (timestamp, statistics) pair as they arrive, whatever the
+    // cadence. Returns the updated state for the caller to carry forward.
+    internal static async Task<(DateOnly? LastKnownDate, StatisticsInfo? LastKnownStatistics, DateOnly? LastStoredDate)> CheckDayRolloverAsync(
+        IMowerRepository repository, DateOnly? lastKnownDate, StatisticsInfo? lastKnownStatistics, DateOnly? lastStoredStatisticsDate,
+        DateTimeOffset newTimestamp, StatisticsInfo? newStatistics, CancellationToken cancellationToken)
+    {
+        var today = DateOnly.FromDateTime(newTimestamp.Date);
+        if (lastKnownDate is { } previousDate && previousDate < today && lastKnownStatistics is not null &&
+            (lastStoredStatisticsDate is null || lastStoredStatisticsDate < previousDate))
+        {
+            await repository.AppendDailyStatisticsAsync(new DailyStatisticsSnapshot(previousDate, lastKnownStatistics), cancellationToken);
+            lastStoredStatisticsDate = previousDate;
+        }
+
+        return (today, newStatistics ?? lastKnownStatistics, lastStoredStatisticsDate);
     }
 
     // Reads a mower's track-<mower>.jsonl and summarizes it into sessions: runs
