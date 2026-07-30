@@ -8,6 +8,45 @@ got there. Newest entry on top.
 
 ## 2026-07-30
 
+**Satellite imagery behind the coverage map - tried, tuned, reverted.**
+The user asked whether a satellite view could sit behind the coverage
+dots. Went with Esri's free, keyless World Imagery `/export` endpoint
+(no API key or billing account, unlike Google's Static Maps API) -
+requesting it in plain geographic coordinates with a pixel width:height
+ratio matching the coverage plot's own local-meters aspect ratio made
+Esri's linear per-degree stretch line up with the existing dot projection
+with no extra reprojection math needed.
+
+First version picked a fixed 15 px/meter target and 500'd outright for
+AM430X NERA ("no sat image there") - direct testing found the export
+endpoint hard-errors (`"Error: bytes"`, no graceful degradation) once
+asked for finer resolution than it has cached tiles for at a given
+location, and that ceiling varies by location (confirmed down to bisecting
+image sizes against real failing requests): ~8 px/m in Asker, Norway,
+only ~5-6 px/m in rural Piteå, Sweden. Dropped to a fixed conservative 4
+px/m to stop the 500s, which fixed the error but then looked "too coarse"
+- blurry from being upscaled well past its real detail in the browser.
+
+Fixed properly with a new `SatelliteImageService`: probes a descending
+list of resolution candidates using Esri's cheap `f=json` response form
+(empty `href` on failure, real `href`/dimensions on success - confirmed
+against both a real success and failure for the same bbox) and caches
+whichever one actually works per bounding box, so every location
+automatically gets the best detail Esri will serve it rather than one
+number that's either too conservative everywhere or fails somewhere.
+
+Then the user compared it directly against a Google Maps satellite
+screenshot of the same address (`am19.png`) - sharp, clearly showing the
+house/lawn/trees - against Esri's still-blurry best effort even after the
+fix. Esri's ceiling here isn't a bug to keep tuning around, it's a real
+data-source quality gap between the free/keyless option and Google's paid
+one. Asked the user how to proceed (keep Esri as "good enough for a rough
+shape," try Bing's free-key aerial imagery, or reconsider Google's
+billing-account setup) - answer: drop it entirely, "too much for too
+little." Reverted (`e8a6b6d`, `2fea258`, `361c259`) - coverage map is back
+to plain dots on a blank background. The dot-size and stale-`WorkAreaId`
+fixes from earlier the same day were unaffected and stayed in place.
+
 **SQLite migration + WebSocket hybrid tracking, designed, built, and cut
 over to production in one session.** Started as a routine "should we move
 off JSONL" design conversation (per-mower SQLite db + a common db,
