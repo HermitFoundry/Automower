@@ -38,6 +38,83 @@ public record MowerHistory(
     CalendarTask[] LatestCalendarTasks,
     int SkippedLines);
 
+// Parses a raw REST mower response's {"data":{"attributes":{...}}} shape -
+// shared between JsonlMowerRepository.GetHistory() (unwraps its own JSONL
+// line envelope first) and SqliteMowerRepository (a "rest"-sourced
+// RawEvents.RawJson row already *is* this shape directly) - factored out so
+// the parsing details, including the hard-won positions[0]-only reasoning,
+// exist in exactly one place rather than two copies drifting apart.
+internal static class RestSnapshotParser
+{
+    public static (string Activity, long WorkAreaId, int BatteryPercent, long PlannerNextStartTimestamp, double? Latitude, double? Longitude, StatisticsInfo? Statistics)
+        ParsePollFields(JsonElement attributes)
+    {
+        var mowerObj = attributes.GetProperty("mower");
+        var activity = mowerObj.GetProperty("activity").GetString() ?? "UNKNOWN";
+        var workAreaId = mowerObj.TryGetProperty("workAreaId", out var waIdEl) ? waIdEl.GetInt64() : 0L;
+        var battery = attributes.GetProperty("battery").GetProperty("batteryPercent").GetInt32();
+        var plannerNextStart = attributes.TryGetProperty("planner", out var plannerEl) &&
+            plannerEl.TryGetProperty("nextStartTimestamp", out var nextStartEl)
+            ? nextStartEl.GetInt64()
+            : 0L;
+
+        // Only the newest breadcrumb (positions[0]) - not the rest of that
+        // poll's up-to-50-entry array. Investigated 2026-07-29 after real
+        // dots turned up clearly outside their own work area on 3 different
+        // mowers: a poll's full breadcrumb array can still hold the tail
+        // end of the *previous* stay (e.g. several minutes parked near a
+        // charger in a different work area) for many polls after the mower
+        // has already moved on - confirmed by 3 real episodes where the
+        // outlier count decayed by exactly 2 per poll (46->44->42->...),
+        // the signature of a sliding 50-point buffer aging out stale
+        // history. positions[0] is always exactly synchronized with that
+        // same poll's own workAreaId, so it's the only entry in the array
+        // actually guaranteed correct - confirmed empirically: doing this
+        // dropped the outlier count to zero on real data.
+        double? latitude = null, longitude = null;
+        if (attributes.TryGetProperty("positions", out var positionsEl) &&
+            positionsEl.ValueKind == JsonValueKind.Array && positionsEl.GetArrayLength() > 0)
+        {
+            var newest = positionsEl[0];
+            if (newest.TryGetProperty("latitude", out var latEl) && newest.TryGetProperty("longitude", out var lonEl))
+            {
+                latitude = latEl.GetDouble();
+                longitude = lonEl.GetDouble();
+            }
+        }
+
+        var statistics = attributes.TryGetProperty("statistics", out var statsEl)
+            ? statsEl.Deserialize<StatisticsInfo>()
+            : null;
+
+        return (activity, workAreaId, battery, plannerNextStart, latitude, longitude, statistics);
+    }
+
+    public static void AccumulateWorkAreaNames(JsonElement attributes, Dictionary<long, string> workAreaNames)
+    {
+        if (!attributes.TryGetProperty("workAreas", out var workAreasEl) || workAreasEl.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        foreach (var wa in workAreasEl.EnumerateArray())
+        {
+            if (wa.TryGetProperty("workAreaId", out var idEl) &&
+                wa.TryGetProperty("name", out var nameEl) &&
+                !string.IsNullOrWhiteSpace(nameEl.GetString()))
+            {
+                workAreaNames[idEl.GetInt64()] = nameEl.GetString()!.Trim();
+            }
+        }
+    }
+
+    public static CalendarTask[]? TryGetNonEmptyCalendarTasks(JsonElement attributes)
+        => attributes.TryGetProperty("calendar", out var calendarEl) &&
+           calendarEl.Deserialize<CalendarInfo>() is { Tasks.Length: > 0 } calendarInfo
+            ? calendarInfo.Tasks
+            : null;
+}
+
 // Storage seam for one mower's data - poll history, WebSocket event log, and
 // cached schedule. Shaped by what TrackingService/CoverageService/
 // ScheduleService actually need (per the 2026-07-29 SQLite-migration
@@ -47,13 +124,31 @@ public record MowerHistory(
 // implementation.
 public interface IMowerRepository
 {
-    Task AppendPollAsync(string mowerId, string rawJson, DateTimeOffset timestamp, CancellationToken cancellationToken = default);
+    // Records one raw payload - a REST poll response (source "rest") or a
+    // WebSocket event (source "event:<type>", e.g. "event:battery-event-v2",
+    // or "event:ready" for the handshake) - unconditionally and
+    // unprocessed, then derives whatever PollRecord-relevant fields that
+    // payload's shape carries. See the 2026-07-30 SQLite-migration plan:
+    // this is the one seam change from Phase 1's AppendPollAsync/
+    // AppendEventAsync - both folded into a single write path since a REST
+    // poll and a WebSocket event are now just two shapes of the same thing
+    // ("we learned something, here's the raw proof"), sharing one caller
+    // contract instead of two nearly-identical ones.
+    Task RecordAsync(DateTimeOffset timestamp, string source, string rawJson, CancellationToken cancellationToken = default);
+
+    // Re-derives whatever PollRecord-relevant data is stored from the raw
+    // payloads RecordAsync already persisted, using the current extraction
+    // logic - the recovery path when that logic turns out to have had a
+    // bug, or a newly-added field needs backfilling into history that
+    // predates the code change, without ever needing to touch/re-collect
+    // the raw data itself. A no-op for a backend (like JsonlMowerRepository)
+    // that already re-derives everything fresh on every GetHistory() call.
+    Task RebuildObservationsAsync(CancellationToken cancellationToken = default);
+
     MowerHistory GetHistory();
 
     CalendarTask[] GetSchedule();
     void SaveSchedule(CalendarTask[] tasks);
-
-    Task AppendEventAsync(string mowerId, string rawMessageJson, CancellationToken cancellationToken = default);
 
     // Append-only, one row per calendar day, forever - "180 records for a
     // season" (see the 2026-07-29 discussion) is trivial at this scale, so
@@ -88,20 +183,48 @@ public class JsonlMowerRepository(string mowerName) : IMowerRepository
     private readonly string _schedulePath = Storage.GetScheduleLogPath(mowerName);
     private readonly string _statisticsLogPath = Storage.GetStatisticsLogPath(mowerName);
 
-    public async Task AppendPollAsync(string mowerId, string rawJson, DateTimeOffset timestamp, CancellationToken cancellationToken = default)
+    // "rest" writes a track-<mower>.jsonl line (as AppendPollAsync did
+    // before this method existed); anything else (an "event:<type>"/
+    // "event:ready" source) writes an events-<mower>.jsonl line instead
+    // (as AppendEventAsync did) - same two files, same line formats,
+    // unchanged, just reached through one method instead of two now that
+    // SqliteMowerRepository's RawEvents table unifies them for real.
+    // mowerId is no longer a parameter (RecordAsync is shaped by what the
+    // SQLite backend's RawEvents table needs, which has no use for it - the
+    // mower's identity is already implicit in which per-mower .db file this
+    // is) - JSONL lines simply stop carrying that field going forward;
+    // nothing ever read it back out of them.
+    public async Task RecordAsync(DateTimeOffset timestamp, string source, string rawJson, CancellationToken cancellationToken = default)
     {
         Storage.EnsureDataDir();
         using var doc = JsonDocument.Parse(rawJson);
-        var record = new
+        if (source == "rest")
         {
-            timestamp,
-            mowerId,
-            mowerName,
-            bytes = Encoding.UTF8.GetByteCount(rawJson),
-            response = doc.RootElement,
-        };
-        await File.AppendAllTextAsync(_logPath, JsonSerializer.Serialize(record) + Environment.NewLine, cancellationToken);
+            var record = new
+            {
+                timestamp,
+                mowerName,
+                bytes = Encoding.UTF8.GetByteCount(rawJson),
+                response = doc.RootElement,
+            };
+            await File.AppendAllTextAsync(_logPath, JsonSerializer.Serialize(record) + Environment.NewLine, cancellationToken);
+        }
+        else
+        {
+            var record = new
+            {
+                timestamp,
+                mowerName,
+                message = doc.RootElement,
+            };
+            await File.AppendAllTextAsync(_eventLogPath, JsonSerializer.Serialize(record) + Environment.NewLine, cancellationToken);
+        }
     }
+
+    // GetHistory() below always re-derives everything fresh from
+    // track-<mower>.jsonl on every call - there's no separate materialized
+    // "Observations" table to go stale here, so nothing to rebuild.
+    public Task RebuildObservationsAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
     // Reads and groups track-<mower>.jsonl in one pass - same fields,
     // same grouping-by-(activity, workAreaId) logic previously duplicated
@@ -127,65 +250,15 @@ public class JsonlMowerRepository(string mowerName) : IMowerRepository
                 var root = doc.RootElement;
                 var timestamp = root.GetProperty("timestamp").GetDateTimeOffset();
                 var attributes = root.GetProperty("response").GetProperty("data").GetProperty("attributes");
-                var mowerObj = attributes.GetProperty("mower");
-                var activity = mowerObj.GetProperty("activity").GetString() ?? "UNKNOWN";
-                var workAreaId = mowerObj.TryGetProperty("workAreaId", out var waIdEl) ? waIdEl.GetInt64() : 0L;
-                var battery = attributes.GetProperty("battery").GetProperty("batteryPercent").GetInt32();
-                var plannerNextStart = attributes.TryGetProperty("planner", out var plannerEl) &&
-                    plannerEl.TryGetProperty("nextStartTimestamp", out var nextStartEl)
-                    ? nextStartEl.GetInt64()
-                    : 0L;
 
-                // Only the newest breadcrumb (positions[0]) - not the rest of
-                // that poll's up-to-50-entry array. Investigated 2026-07-29
-                // after real dots turned up clearly outside their own work
-                // area on 3 different mowers: a poll's full breadcrumb array
-                // can still hold the tail end of the *previous* stay (e.g.
-                // several minutes parked near a charger in a different work
-                // area) for many polls after the mower has already moved on
-                // - confirmed by 3 real episodes where the outlier count
-                // decayed by exactly 2 per poll (46->44->42->...), the
-                // signature of a sliding 50-point buffer aging out stale
-                // history. positions[0] is always exactly synchronized with
-                // that same poll's own workAreaId, so it's the only entry in
-                // the array actually guaranteed correct - confirmed
-                // empirically: doing this dropped the outlier count to zero
-                // on real data.
-                double? latitude = null, longitude = null;
-                if (attributes.TryGetProperty("positions", out var positionsEl) &&
-                    positionsEl.ValueKind == JsonValueKind.Array && positionsEl.GetArrayLength() > 0)
-                {
-                    var newest = positionsEl[0];
-                    if (newest.TryGetProperty("latitude", out var latEl) && newest.TryGetProperty("longitude", out var lonEl))
-                    {
-                        latitude = latEl.GetDouble();
-                        longitude = lonEl.GetDouble();
-                    }
-                }
-
-                var statistics = attributes.TryGetProperty("statistics", out var statsEl)
-                    ? statsEl.Deserialize<StatisticsInfo>()
-                    : null;
-
+                var (activity, workAreaId, battery, plannerNextStart, latitude, longitude, statistics) =
+                    RestSnapshotParser.ParsePollFields(attributes);
                 polls.Add(new PollRecord(timestamp, activity, battery, workAreaId, plannerNextStart, latitude, longitude, statistics));
 
-                if (attributes.TryGetProperty("workAreas", out var workAreasEl) && workAreasEl.ValueKind == JsonValueKind.Array)
+                RestSnapshotParser.AccumulateWorkAreaNames(attributes, workAreaNames);
+                if (RestSnapshotParser.TryGetNonEmptyCalendarTasks(attributes) is { } calendarTasks)
                 {
-                    foreach (var wa in workAreasEl.EnumerateArray())
-                    {
-                        if (wa.TryGetProperty("workAreaId", out var idEl) &&
-                            wa.TryGetProperty("name", out var nameEl) &&
-                            !string.IsNullOrWhiteSpace(nameEl.GetString()))
-                        {
-                            workAreaNames[idEl.GetInt64()] = nameEl.GetString()!.Trim();
-                        }
-                    }
-                }
-
-                if (attributes.TryGetProperty("calendar", out var calendarEl) &&
-                    calendarEl.Deserialize<CalendarInfo>() is { Tasks.Length: > 0 } calendarInfo)
-                {
-                    latestCalendarTasks = calendarInfo.Tasks;
+                    latestCalendarTasks = calendarTasks;
                 }
             }
             catch (Exception)
@@ -230,20 +303,6 @@ public class JsonlMowerRepository(string mowerName) : IMowerRepository
         }
         SaveSchedule(match.Tasks);
         return match.Tasks;
-    }
-
-    public async Task AppendEventAsync(string mowerId, string rawMessageJson, CancellationToken cancellationToken = default)
-    {
-        Storage.EnsureDataDir();
-        using var doc = JsonDocument.Parse(rawMessageJson);
-        var record = new
-        {
-            timestamp = DateTimeOffset.Now,
-            mowerId,
-            mowerName,
-            message = doc.RootElement,
-        };
-        await File.AppendAllTextAsync(_eventLogPath, JsonSerializer.Serialize(record) + Environment.NewLine, cancellationToken);
     }
 
     public async Task AppendDailyStatisticsAsync(DailyStatisticsSnapshot snapshot, CancellationToken cancellationToken = default)

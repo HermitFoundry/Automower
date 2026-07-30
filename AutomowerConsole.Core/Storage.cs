@@ -51,6 +51,18 @@ public static class Storage
     public static string GetStatisticsLogPath(string mowerName)
         => Path.Combine(DataDir, $"statistics-{SanitizeForFileName(mowerName)}.jsonl");
 
+    // One SQLite db per mower (SqliteMowerRepository) - RawEvents/
+    // Observations/DailyStatistics/Schedule all live in this single file,
+    // per the 2026-07-30 SQLite-migration plan's "per-mower db, no
+    // cross-mower queries needed" decision.
+    public static string GetMowerDbPath(string mowerName)
+        => Path.Combine(DataDir, $"mower-{SanitizeForFileName(mowerName)}.db");
+
+    // Shared across all mowers (SqliteMowerRegistry) - just the Mowers
+    // registry table today, replacing mowers.json.
+    public static string GetCommonDbPath()
+        => Path.Combine(DataDir, "common.db");
+
     private static string SanitizeForFileName(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();

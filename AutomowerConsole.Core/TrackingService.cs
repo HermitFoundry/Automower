@@ -137,7 +137,7 @@ public class TrackingService(ScheduleService schedule, IMowerRepositoryFactory r
                 // largest possible miss is one poll interval, not up to
                 // ~30 minutes at night).
                 var byteCount = Encoding.UTF8.GetByteCount(raw);
-                await repository.AppendPollAsync(mowerId, raw, timestamp, cancellationToken);
+                await repository.RecordAsync(timestamp, "rest", raw, cancellationToken);
 
                 // Rolled over to a new calendar day since the last poll we
                 // saw - record yesterday's end-of-day snapshot now, using the

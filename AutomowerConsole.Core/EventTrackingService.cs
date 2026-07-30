@@ -117,10 +117,10 @@ public class EventTrackingService(IMowerRepositoryFactory repositoryFactory)
                     continue;
                 }
 
-                await repository.AppendEventAsync(mowerId, text, cancellationToken);
+                var summary = isReadyMessage ? "ready" : root.GetProperty("type").GetString();
+                await repository.RecordAsync(DateTimeOffset.Now, isReadyMessage ? "event:ready" : $"event:{summary}", text, cancellationToken);
                 recordCount++;
 
-                var summary = isReadyMessage ? "ready" : root.GetProperty("type").GetString();
                 Console.WriteLine($"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}] logged ({summary}) - {recordCount} event(s) this connection");
             }
         }
