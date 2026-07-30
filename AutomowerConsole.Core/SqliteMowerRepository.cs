@@ -170,8 +170,28 @@ public class SqliteMowerRepository(string mowerName) : IMowerRepository
     {
         using var connection = OpenConnection();
 
-        var rows = connection.Query<ObservationRow>(
-            "SELECT * FROM Observations ORDER BY Timestamp;").ToList();
+        // Queried as dynamic rows and mapped by hand, not Query<ObservationRow>
+        // directly - a private record nested inside this class confused
+        // Dapper's constructor-matching (confirmed: "no parameterless
+        // constructor or one matching signature" at runtime even though
+        // ObservationRow's own constructor matches the query's columns
+        // exactly) - sidesteps relying on Dapper's reflection-based
+        // materialization for this shape at all, same reasoning as
+        // GetDailyStatisticsHistory's manual StatisticsInfo mapping below.
+        var rows = connection.Query("SELECT * FROM Observations ORDER BY Timestamp;")
+            .Select(r => (IDictionary<string, object?>)r)
+            .Select(r => new ObservationRow(
+                (long)r["Id"]!,
+                (long)r["RawEventId"]!,
+                (string)r["Timestamp"]!,
+                (string)r["Source"]!,
+                (string?)r["Activity"],
+                (long?)r["WorkAreaId"],
+                (int?)(long?)r["BatteryPercent"],
+                (double?)r["Latitude"],
+                (double?)r["Longitude"],
+                (long?)r["PlannerNextStartTimestamp"]))
+            .ToList();
 
         var polls = new List<PollRecord>(rows.Count);
         string? activity = null;
