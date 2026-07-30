@@ -50,6 +50,7 @@ builder.Services.AddSingleton<CoverageService>();
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<LocationService>();
 builder.Services.AddSingleton<WeatherService>();
+builder.Services.AddSingleton<SatelliteImageService>();
 
 var app = builder.Build();
 

@@ -6,6 +6,7 @@
 @inject LocationService LocationService
 @inject WeatherService WeatherService
 @inject CoverageService CoverageService
+@inject SatelliteImageService SatelliteImageService
 @inject IMowerRepositoryFactory MowerRepositoryFactory
 
 <PageTitle>@Name - Automower</PageTitle>
@@ -443,6 +444,13 @@ else if (_detail is not null && _stored is not null)
                 .ToDictionary(w => w.WorkAreaId, w => w.Name.Trim());
             var coverage = CoverageService.GetCoverageByWorkArea(_stored.Name);
             _coveragePlot = MowerDisplay.BuildCoveragePlot(coverage, workAreaNames);
+            if (_coveragePlot.Dots.Count > 0)
+            {
+                var satelliteImageUrl = await SatelliteImageService.GetImageUrlAsync(
+                    _coveragePlot.LonMin, _coveragePlot.LatMin, _coveragePlot.LonMax, _coveragePlot.LatMax,
+                    _coveragePlot.Width, _coveragePlot.Height);
+                _coveragePlot = _coveragePlot with { SatelliteImageUrl = satelliteImageUrl };
+            }
 
             var dailyStatistics = MowerRepositoryFactory.ForMower(_stored.Name).GetDailyStatisticsHistory()
                 .OrderBy(d => d.Date)
