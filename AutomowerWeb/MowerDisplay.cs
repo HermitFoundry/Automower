@@ -357,7 +357,13 @@ public static class MowerDisplay
 
     public readonly record struct CoverageDot(double Cx, double Cy, string ColorVar);
     public readonly record struct CoverageLegendItem(string Name, string ColorVar, int Count);
-    public record CoveragePlot(string ViewBox, List<CoverageDot> Dots, List<CoverageLegendItem> Legend);
+
+    // Width/Height duplicate what's already encoded in ViewBox (always "0 0
+    // {Width} {Height}") - kept as separate numbers anyway so the Razor page
+    // can size the satellite <image> element without re-parsing the ViewBox
+    // string. SatelliteImageUrl is null when there are no points to bound an
+    // image request around (same case ViewBox falls back to "0 0 1 1" for).
+    public record CoveragePlot(string ViewBox, double Width, double Height, string? SatelliteImageUrl, List<CoverageDot> Dots, List<CoverageLegendItem> Legend);
 
     // Real GPS fixes recorded while actually mowing (CoverageService already
     // filtered to activity == "MOWING" - see its own comment on why: a poll
@@ -375,7 +381,7 @@ public static class MowerDisplay
         var withPoints = coverage.Where(c => c.Points.Count > 0).ToList();
         if (withPoints.Count == 0)
         {
-            return new CoveragePlot("0 0 1 1", [], []);
+            return new CoveragePlot("0 0 1 1", 1, 1, null, [], []);
         }
 
         var allPoints = withPoints.SelectMany(c => c.Points).ToList();
@@ -415,8 +421,50 @@ public static class MowerDisplay
             }
         }
 
-        var viewBox = string.Create(CultureInfo.InvariantCulture,
-            $"0 0 {maxX + (2 * Pad):F2} {svgHeight:F2}");
-        return new CoveragePlot(viewBox, dots, legend);
+        var width = maxX + (2 * Pad);
+        var height = svgHeight;
+        var viewBox = string.Create(CultureInfo.InvariantCulture, $"0 0 {width:F2} {height:F2}");
+        var satelliteImageUrl = BuildSatelliteImageUrl(minLat, minLon, MetersPerDegLat, metersPerDegLon, width, height, Pad);
+        return new CoveragePlot(viewBox, width, height, satelliteImageUrl, dots, legend);
+    }
+
+    // Esri's free, keyless "World Imagery" sample server (the same one
+    // countless Leaflet/OpenLayers tutorials hotlink directly - no API key
+    // or Google-Cloud-style billing account needed, unlike Google's Static
+    // Maps API). /export renders an arbitrary bounding box to a plain image,
+    // which is exactly what a background for BuildCoveragePlot's own SVG
+    // needs. The trick to making the two line up pixel-for-pixel: requesting
+    // the export in plain geographic coordinates (bboxSR=4326) means Esri
+    // stretches the given lon/lat bbox linearly across whatever pixel
+    // width/height is requested - so asking for a width:height pixel ratio
+    // that matches our own local-meters viewBox (which already accounts for
+    // longitude degrees being shorter than latitude degrees away from the
+    // equator, via metersPerDegLon = metersPerDegLat * cos(lat)) makes
+    // Esri's linear stretch land on the same isotropic-meters projection our
+    // dots are already plotted in, with no separate reprojection math needed
+    // on either side.
+    private const double MetersPerPixel = 1.0 / 15.0; // ~15 px/meter of real ground - close-up enough for a lawn-sized area
+    private const int MaxImagePixels = 1600; // stays comfortably under the sample server's own size cap
+
+    private static string BuildSatelliteImageUrl(
+        double minLat, double minLon, double metersPerDegLat, double metersPerDegLon,
+        double widthMeters, double heightMeters, double pad)
+    {
+        // Undo the Pad this method's caller already baked into width/height,
+        // then reapply it in lon/lat degrees - Pad is a meters quantity, and
+        // longitude degrees and latitude degrees don't cover the same number
+        // of meters except at the equator.
+        var lonMin = minLon - (pad / metersPerDegLon);
+        var lonMax = minLon + ((widthMeters - pad) / metersPerDegLon);
+        var latMin = minLat - (pad / metersPerDegLat);
+        var latMax = minLat + ((heightMeters - pad) / metersPerDegLat);
+
+        var scale = Math.Min(1.0 / MetersPerPixel, MaxImagePixels / Math.Max(widthMeters, heightMeters));
+        var pxWidth = Math.Max(64, (int)Math.Round(widthMeters * scale));
+        var pxHeight = Math.Max(64, (int)Math.Round(heightMeters * scale));
+
+        var bbox = string.Create(CultureInfo.InvariantCulture, $"{lonMin:F7},{latMin:F7},{lonMax:F7},{latMax:F7}");
+        return "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export"
+            + $"?bbox={bbox}&bboxSR=4326&imageSR=4326&size={pxWidth},{pxHeight}&format=jpg&f=image";
     }
 }

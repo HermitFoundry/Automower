@@ -369,12 +369,17 @@ else if (_detail is not null && _stored is not null)
             </div>
             <div class="coverage-map">
                 <svg viewBox="@_coveragePlot.ViewBox" xmlns="http://www.w3.org/2000/svg">
+                    @if (_coveragePlot.SatelliteImageUrl is not null)
+                    {
+                        <image href="@_coveragePlot.SatelliteImageUrl" x="0" y="0" width="@_coveragePlot.Width" height="@_coveragePlot.Height" preserveAspectRatio="none" />
+                    }
                     @foreach (var dot in _coveragePlot.Dots)
                     {
                         <circle cx="@dot.Cx" cy="@dot.Cy" r="0.15" class="coverage-dot" fill="@dot.ColorVar" />
                     }
                 </svg>
             </div>
+            <p class="muted small">Satellite imagery: Esri, Maxar, Earthstar Geographics, and the GIS User Community.</p>
         }
     </section>
 }
