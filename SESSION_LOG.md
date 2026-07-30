@@ -6,6 +6,123 @@ replacement for `git log`. `SKILL.md`/`README.md`/`docs/` hold the durable
 reference material this work produced; this file is the story of how it
 got there. Newest entry on top.
 
+## 2026-07-30
+
+**SQLite migration + WebSocket hybrid tracking, designed, built, and cut
+over to production in one session.** Started as a routine "should we move
+off JSONL" design conversation (per-mower SQLite db + a common db,
+Dapper not EF Core - all agreed quickly, low-risk) and grew into the
+biggest architectural change this project has made: mower tracking is now
+event-driven, not poll-driven, and storage is SQLite everywhere. See
+`docs/database-schema.md` for the resulting schema; this entry is the
+story of how it got decided and what broke along the way.
+
+**The real design decision: sequence SQLite before events, not after.**
+The original plan was "hybrid events now, SQLite storage later" - already
+under discussion (see 2026-07-29's repository-pattern entry). Revisited
+when the user asked the sharp question that mattered: on JSONL, every
+written line has to be a complete snapshot, so real event volume
+(`position-event-v2` fires every 20-30s while mowing) means either
+duplicating every unchanged field into a new line every time, or building
+debounce/heartbeat throttling to bound it. A relational schema doesn't
+have that problem - a row can leave unrelated columns `NULL`. So: design
+the SQLite schema with the event use case in mind *first*, build the
+event hybrid on top of it *second* - less total work than building JSONL
+throttling logic and discarding it once SQLite arrived anyway. This
+reordering is why `HybridTrackingService` ended up with zero debounce
+logic at all - every WebSocket event is just a cheap, genuinely sparse
+insert, exactly what the schema was shaped for.
+
+**Schema: `RawEvents` (raw, unprocessed) + `Observations` (derived,
+sparse), not one table.** Caught during plan review, before any code was
+written: a schema that only stores pre-extracted columns throws away
+exactly what made JSONL logs valuable for after-the-fact debugging (the
+2026-07-29 coverage-map bug and the daily-statistics work were only
+diagnosable because the *original* raw JSON was still on disk). So
+`RawEvents` is the permanent, unprocessed source of truth (one row per
+REST poll or WebSocket event, exactly as received - unifies what were two
+separate JSONL files); `Observations` is a derived, sparse table built
+from it, rebuildable from scratch at any time if the extraction logic
+ever needs fixing, without touching the raw data.
+
+**Dev environment: a real second QNAP deployment, not just a branch.**
+Built on `feature/sqlite-event-tracking`, in a second checkout
+(`/repos/Automower-dev`) and a second `AutomowerWeb-dev` container (port
+5153), so production (`AutomowerWeb` on 5152, all 3 `track` daemons)
+stayed completely untouched through the whole build. AM308V Nede was the
+one mower used to validate against - it kept running its *production*
+`track` daemon the whole time as the "control," while the dev checkout's
+new code ran against the same real mower concurrently. Confirmed safe:
+REST `GET`s aren't exclusive, WebSocket's 10-connection account limit had
+plenty of headroom for one extra.
+
+**Real bugs, only found by actually running it, not by building it:**
+- `GetHistory()`'s `Query<ObservationRow>` crashed at runtime - Dapper
+  couldn't materialize a `private record` nested inside
+  `SqliteMowerRepository`, even though its constructor matched the
+  query's columns exactly. Fixed by mapping from dynamic rows by hand
+  (same approach already used for `StatisticsInfo`, which was written
+  defensively for exactly this kind of doubt up front).
+- The first JSONL-vs-SQLite diff looked wrong (lots of extra rows on the
+  SQLite side) - turned out to be a flawed comparison, not a bug: the
+  migration pulls in `events-<mower>.jsonl` as well as
+  `track-<mower>.jsonl`, and `JsonlMowerRepository.GetHistory()` never
+  read the events file at all. Filtering the SQLite side to REST-only
+  Observations before diffing showed an exact match (the one remaining
+  difference was the still-"ongoing" session's duration, which differs by
+  exactly the wall-clock time between the two capture runs).
+
+**Live validation, not just synthetic:** the user sent AM308V out to
+mow `hovedomrade` for real while both trackers were running. The hybrid
+tracker resolved the whole leave-the-dock sequence (workAreaId set ->
+NOT_APPLICABLE -> CHARGING -> LEAVING -> MOWING) within about a minute at
+second-level precision - a transition REST polling would have blurred or
+missed. Also caught a genuine ~2-minute `NOT_APPLICABLE`/
+`SEARCHING_FOR_SATELLITES` episode mid-mow (confirmed against the raw
+payload: no diagnostic detail beyond the bare label - Husqvarna's API
+really does only tell you *that* it's searching, never *why*). Confirmed
+`workAreas[].progress` is a genuinely live, non-monotonic value in
+Husqvarna's own API (0% -> 4% -> 2% -> 4% within a few minutes, verified
+against the raw JSON each time) - not a caching or display bug on our
+side, just a real characteristic worth remembering if progress is ever
+trusted for anything beyond a rough display. Coverage density confirmed
+concretely too: 627 REST-only points vs. 1,030 once WebSocket
+`position-event-v2` data was included for the same mower - about 65%
+denser, since events fire every 20-30s vs. REST's 60s, each a single
+fresh GPS fix with no stale-buffer risk (confirmed `position-event-v2` is
+a single point, not an array like REST's `positions[]`).
+
+**Cutover:** merged to `main`, migrated all 3 mowers' real production
+history (AM308V 1303 polls/1245 events, AM405X 1760 polls/0 events,
+AM430X NERA 2940 polls/1025 events - zero malformed lines anywhere),
+redeployed `AutomowerWeb`, replaced all 3 `track` daemons with
+`hybrid-track` (`startall.sh` updated), retired the standalone
+`eventtracking` experiments (superseded) and the dev checkout/container.
+One scare during cleanup: a verification `ls /repos/` after `rm -rf
+/repos/Automower-dev` failed with "No such file or directory" - looked
+like `/repos` itself might be gone, but was just a command-construction
+mistake (that `ls` ran on the QNAP host, where the path is `/share/Repos`,
+not `/repos` - that mapping only exists inside containers). Confirmed via
+the host filesystem directly: production untouched, only the intended
+directory removed.
+
+**Post-cutover accuracy pass, prompted by the user asking a very direct
+verification question** ("is all data now in SQLite, and is the schema
+documented?"). Answering it properly surfaced two real, user-facing bugs
+that a "does it still build" check would never have caught: `sessions`/
+`daily`/`monthly`/`track`/`eventtracking`'s own console output was still
+printing the old JSONL file paths in their "from .../logging to ..."
+messages, even though the data genuinely lives in SQLite now - fixed to
+print `Storage.GetMowerDbPath` throughout. `README.md`/`docs/database-
+schema.md`/`docs/tracking.md` were also still framing SQLite as a
+"feature branch alternative" instead of the current default - fixed.
+
+**Next up, not started yet:** `README.md` still describes this as "a
+small C# console client" and needs restructuring around what it actually
+is now (web dashboard as the primary interface, then CLI, then
+installation/design/details) - flagged by the user, outline agreed, not
+yet written.
+
 ## 2026-07-29
 
 **The eventtracking experiment kept running overnight and validated the
