@@ -443,7 +443,18 @@ public static class MowerDisplay
     // Esri's linear stretch land on the same isotropic-meters projection our
     // dots are already plotted in, with no separate reprojection math needed
     // on either side.
-    private const double MetersPerPixel = 1.0 / 15.0; // ~15 px/meter of real ground - close-up enough for a lawn-sized area
+    // Confirmed by direct testing (2026-07-30, a real ~48x50m bbox near
+    // AM430X NERA): the sample server 500s ("Error: bytes", empty href even
+    // in f=json mode) once asked for finer resolution than it has cached
+    // tiles for at that location - reliably above ~6 px/meter there, first
+    // failure observed at 300px for that specific ~48m-wide bbox. Not
+    // documented anywhere, found by bisecting image sizes against a real
+    // failing request. No graceful degradation - it's a hard error, not a
+    // silently-blurrier image - so this stays well under that observed
+    // threshold rather than close to it, since the true per-location limit
+    // is unknown and presumably varies (denser imagery exists in
+    // well-mapped areas, coarser in rural ones like this account's mowers).
+    private const double TargetPixelsPerMeter = 4.0;
     private const int MaxImagePixels = 1600; // stays comfortably under the sample server's own size cap
 
     private static string BuildSatelliteImageUrl(
@@ -459,7 +470,7 @@ public static class MowerDisplay
         var latMin = minLat - (pad / metersPerDegLat);
         var latMax = minLat + ((heightMeters - pad) / metersPerDegLat);
 
-        var scale = Math.Min(1.0 / MetersPerPixel, MaxImagePixels / Math.Max(widthMeters, heightMeters));
+        var scale = Math.Min(TargetPixelsPerMeter, MaxImagePixels / Math.Max(widthMeters, heightMeters));
         var pxWidth = Math.Max(64, (int)Math.Round(widthMeters * scale));
         var pxHeight = Math.Max(64, (int)Math.Round(heightMeters * scale));
 
