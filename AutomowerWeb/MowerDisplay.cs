@@ -357,24 +357,7 @@ public static class MowerDisplay
 
     public readonly record struct CoverageDot(double Cx, double Cy, string ColorVar);
     public readonly record struct CoverageLegendItem(string Name, string ColorVar, int Count);
-
-    // Width/Height duplicate what's already encoded in ViewBox (always "0 0
-    // {Width} {Height}") - kept as separate numbers anyway so the Razor page
-    // can size the satellite <image> element without re-parsing the ViewBox
-    // string. LonMin/LatMin/LonMax/LatMax is the same padded bounding box in
-    // real-world coordinates (matches Width/Height exactly - see
-    // BuildCoveragePlot) - the Razor page passes it to SatelliteImageService
-    // to resolve a background image URL, kept as a separate async step since
-    // that needs a live network probe (see that service's own comment for
-    // why) and this method stays a pure, synchronous computation.
-    // SatelliteImageUrl starts unset (null) - populated later via `with`
-    // once/if that probe succeeds. Also null, permanently, when there are no
-    // points to bound an image request around (same case ViewBox falls back
-    // to "0 0 1 1" for).
-    public record CoveragePlot(
-        string ViewBox, double Width, double Height,
-        double LonMin, double LatMin, double LonMax, double LatMax,
-        string? SatelliteImageUrl, List<CoverageDot> Dots, List<CoverageLegendItem> Legend);
+    public record CoveragePlot(string ViewBox, List<CoverageDot> Dots, List<CoverageLegendItem> Legend);
 
     // Real GPS fixes recorded while actually mowing (CoverageService already
     // filtered to activity == "MOWING" - see its own comment on why: a poll
@@ -392,7 +375,7 @@ public static class MowerDisplay
         var withPoints = coverage.Where(c => c.Points.Count > 0).ToList();
         if (withPoints.Count == 0)
         {
-            return new CoveragePlot("0 0 1 1", 1, 1, 0, 0, 0, 0, null, [], []);
+            return new CoveragePlot("0 0 1 1", [], []);
         }
 
         var allPoints = withPoints.SelectMany(c => c.Points).ToList();
@@ -432,20 +415,8 @@ public static class MowerDisplay
             }
         }
 
-        var width = maxX + (2 * Pad);
-        var height = svgHeight;
-        var viewBox = string.Create(CultureInfo.InvariantCulture, $"0 0 {width:F2} {height:F2}");
-
-        // Padded bounding box in real-world coordinates, matching the
-        // viewBox exactly - Pad is a meters quantity, so it's converted to
-        // lon/lat degrees separately in each direction (longitude degrees
-        // and latitude degrees don't cover the same number of meters except
-        // at the equator).
-        var lonMin = minLon - (Pad / metersPerDegLon);
-        var lonMax = minLon + ((width - Pad) / metersPerDegLon);
-        var latMin = minLat - (Pad / MetersPerDegLat);
-        var latMax = minLat + ((height - Pad) / MetersPerDegLat);
-
-        return new CoveragePlot(viewBox, width, height, lonMin, latMin, lonMax, latMax, null, dots, legend);
+        var viewBox = string.Create(CultureInfo.InvariantCulture,
+            $"0 0 {maxX + (2 * Pad):F2} {svgHeight:F2}");
+        return new CoveragePlot(viewBox, dots, legend);
     }
 }
