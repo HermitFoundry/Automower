@@ -2,9 +2,9 @@
 
 A running narrative of what happened in each work session on this project —
 the reasoning, dead ends, and decisions behind the commits, not a
-replacement for `git log`. `SKILL.md`/`README.md`/`qnap_infrastructure_setup.md`
-hold the durable reference material this work produced; this file is the
-story of how it got there. Newest entry on top.
+replacement for `git log`. `SKILL.md`/`README.md`/`docs/` hold the durable
+reference material this work produced; this file is the story of how it
+got there. Newest entry on top.
 
 ## 2026-07-29
 

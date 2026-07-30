@@ -29,12 +29,12 @@ hand for each. `startall.sh` discovers the mower list from `.data/mowers.json`
 (fetching it first via `am.sh list` if missing) rather than hardcoding the 3
 current mower names, so it stays correct if a mower is added/renamed/removed.
 
-**Getting a shell on that container**: see README's "Connecting to the QNAP
-container over SSH" section for the two-hop pattern (host, then `docker exec`
-into the container) and the `ssh automower` alias shortcut - and
-`qnap_infrastructure_setup.md` for the deeper QNAP-specific gotchas behind
-it (`docker` not on `PATH` for non-interactive/`RemoteCommand` invocations,
-Container Station's port-mapping limitations, the `AllowTcpForwarding`
+**Getting a shell on that container**: see `docs/qnap-access.md` for the
+two-hop pattern (host, then `docker exec` into the container) and the `ssh
+automower` alias shortcut - and `docs/qnap_infrastructure_setup.md` for the
+deeper QNAP-specific gotchas behind it (`docker` not on `PATH` for
+non-interactive/`RemoteCommand` invocations, Container Station's
+port-mapping limitations, the `AllowTcpForwarding`
 saga). Both are host/infra knowledge, not application code, so they're kept
 out of this skill doc's own body.
 

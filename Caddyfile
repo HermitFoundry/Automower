@@ -1,6 +1,6 @@
 # Reverse proxy for AutomowerWeb - the only container with 80/443 published
-# to the QNAP host (see README's "Public deployment" section / the plan in
-# qnap_infrastructure_setup.md for the full architecture). Caddy handles
+# to the QNAP host (see docs/deployment.md / the plan in
+# docs/qnap_infrastructure_setup.md for the full architecture). Caddy handles
 # TLS automatically via Let's Encrypt once AUTOMOWER_HOSTNAME actually
 # resolves to this NAS's public IP and 80/443 are reachable from the
 # internet (both needed for the ACME HTTP challenge).

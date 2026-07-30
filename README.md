@@ -14,9 +14,10 @@ adaptive polling/logging mode (`track`).
 - On a fresh Linux container/host (e.g. a new QNAP Container Station
   container): `git`, `curl`, `tmux` (for `startall.sh`/`stopall.sh`), and the
   system timezone set to match the mowers' own configured local time (not
-  the container default, often UTC — see **`track`: adaptive polling and
-  logging** for why this matters). Run `./bootstrap.sh` as root to install
-  all of the above plus the .NET SDK in one idempotent pass.
+  the container default, often UTC — see
+  [`docs/tracking.md`](docs/tracking.md) for why this matters). Run
+  `./bootstrap.sh` as root to install all of the above plus the .NET SDK in
+  one idempotent pass.
 
 ## Setup
 
@@ -34,7 +35,7 @@ adaptive polling/logging mode (`track`).
    ```
 
    `config` also accepts any other config field the same way (see
-   **`track`: adaptive polling and logging** below for the full list, e.g.
+   [`docs/tracking.md`](docs/tracking.md) for the full list, e.g.
    `IdleIntervalSeconds=240`). Run `dotnet run -- config` with no arguments to
    print the current values (secrets masked). `config.example.json` (repo
    root, tracked) documents the full field set as a reference.
@@ -101,10 +102,12 @@ selection.
 | `workareas [mower]` | List all work areas |
 | `workarea <name\|id> [mower]` | Detailed info for one work area, including its schedule |
 | `stayoutzones [mower]` | List configured stay-out zones |
-| `schedule [mower]` | Show the calendar, refresh `.data/schedule.json`, and show the live next calendar/planned start |
-| `track [seconds] [mower]` | Adaptive-interval polling with logging to a per-mower `.data/track-<mower>.jsonl` (see below) |
-| `sessions [--calendar] [mower]` | Summarize a mower's track log into one line per mowing/charging/etc. session (see below) |
-| `daily [mower]` | One line per calendar day: total Mowing time per work area, then Charging and Parked time (see below) |
+| `schedule [mower]` | Show the calendar, refresh the cached per-mower schedule, and show the live next calendar/planned start |
+| `track [seconds] [mower]` | Adaptive-interval polling with logging to a per-mower `.data/track-<mower>.jsonl` (see [`docs/tracking.md`](docs/tracking.md)) |
+| `sessions [--calendar] [mower]` | Summarize a mower's track log into one line per mowing/charging/etc. session |
+| `daily [mower]` | One line per calendar day: total Mowing time per work area, then Charging and Parked time |
+| `seasons [mower]` | Season-over-season growth in lifetime running/cutting/charging time, charging cycles, blade usage, and drive distance |
+| `baseline <YYYY-MM-DD> [mower]` | Seed an all-zero daily-statistics record on a past date (e.g. a mower's purchase date) so `seasons` has a real day-zero to diff against |
 | `help` | Show usage |
 
 ### Examples
@@ -119,216 +122,14 @@ am messages
 am track                    # start adaptive polling for the active mower
 ```
 
-## `track`: adaptive polling and logging
+## `track`, `sessions`, `daily`, `seasons`
 
-`track` polls the mower's full status on an interval and appends one JSON
-line per kept poll to a per-mower log file, `.data/track-<mower name>.jsonl`
-(e.g. `.data/track-AM430X-NERA.jsonl`), so you can see exactly how much data
-a day of monitoring costs for that mower (the log file's size on disk is the
-answer). Each line is `{timestamp, mowerId, mowerName, bytes, response}`,
-where `response` is the complete raw API payload for that poll. Running
-`track` for multiple mowers in parallel (see **Running `track` unattended**
-below) writes to separate files — there's no combined log.
-
-The polling interval adapts to what's actually happening, in this priority
-order:
-
-1. **Active or in a scheduled mowing window** — poll fast (default 60s).
-   This covers the mower actually being out mowing, and also the window
-   where it's scheduled to start but might still be charging (charge
-   duration isn't predictable, so we poll fast to catch the exact moment
-   it leaves).
-2. **Nighttime** (default 22:00–08:00) and otherwise idle — poll every
-   30 minutes, since no one manually starts a mow overnight.
-3. **Daytime, idle, not scheduled** — poll every 5 minutes, watching for a
-   manually-started mow. If one starts, the next poll notices immediately
-   and switches to the fast interval.
-
-While the mower is parked at the charging station and none of the above
-applies, only the *first* poll after arrival is logged — repeat polls while
-still parked are skipped (only printed to the console), so idle time at the
-dock doesn't inflate the log.
-
-All intervals, plus the nighttime window, are configurable (defaults shown):
-
-```json
-{
-  "ScheduledIntervalSeconds": 60,
-  "IdleIntervalSeconds": 300,
-  "NightIntervalSeconds": 1800,
-  "NightStartHour": 22,
-  "NightEndHour": 8
-}
-```
-
-The schedule used to detect "scheduled window" comes from `.data/schedule.json`,
-refreshed for free from every `track` poll (the mower payload already
-includes the calendar — no extra API call). Run `schedule [mower]` on its
-own to force a refresh without starting `track`.
-
-Press Ctrl+C to stop tracking; already-written log lines are never lost
-since each poll is flushed to disk immediately.
-
-### `sessions`: summarizing a track log
-
-`sessions [--calendar] [mower]` reads that mower's `track-<mower>.jsonl` and
-groups consecutive polls sharing the same `activity` **and** work area
-(Mowing, Charging, Parked, Going home, Leaving, Stopped, ...) into one line
-per session, newest first — a work area switch mid-`Mowing` starts a new
-session even without an activity change:
-
-```
-Sessions for AM405X (newest first, from .data/track-AM405X.jsonl):
-  2026-07-22  Parked      08:55-ongoing (3h05m)    battery  48% ->  48%
-  2026-07-22  Going home  08:45-08:55   (10m)      battery  50% ->  50%  [Back Yard]
-  2026-07-22  Mowing      08:00-08:45   (45m)      battery  70% ->  55%  [Back Yard]
-  2026-07-22  Mowing      06:05-08:00   (1h55m)    battery  98% ->  70%  [Front Lawn]
-  2026-07-22  Leaving     06:00-06:05   (5m)       battery 100% -> 100%
-  2026-07-21  Charging    23:10-06:00   (6h50m)    battery  40% ->  40%
-```
-
-The work area name (in brackets) comes from that same poll's `workAreaId`,
-resolved against the mower's `workAreas` list carried in the payload; it's
-omitted when the id doesn't resolve to a named area (e.g. while charging on
-some mowers, or a mower with only the single default unnamed area).
-
-A session's end time is taken from the *next* differing poll, not its own
-last poll — this matters most for charger stays, since `track` only logs one
-poll on arrival and skips repeats while parked (see above), so a whole
-charging session is often a single log line; using the next poll's timestamp
-is the earliest point the log can actually confirm the mower left. The last
-session in the file (still ongoing) shows `ongoing` instead of an end time,
-with duration computed to now.
-
-**`--calendar`** appends the next calendar start and next planned start to
-each `Charging`/`Parked` session line, **as they stood at that historical
-poll** (both are embedded in every poll's raw payload, so no extra API call
-is needed — see **`calendar` vs `planner`** below for what each one means):
-
-```
-  2026-07-22  Parked      13:02-ongoing (7h05m)    battery  95% ->  95%  next calendar start: 2026-07-23 09:00   next planned start: 2026-07-22 16:03
-```
-
-### `daily`: activity totals per calendar day
-
-`daily [mower]` rolls `sessions`' output up by day: total **Mowing** time per
-work area that day (repeated on the line for each additional area worked,
-summed together if the same area was mowed more than once that day), then
-**Charging** and, if any, **Parked** last — neither is tied to a work area,
-so both are outside that list rather than part of it:
-
-```
-Daily activity for AM405X (newest first, from .data/track-AM405X.jsonl):
-  2026-07-21  Mowing 50m [Front Lawn]   Mowing 30m [Back Yard]   Charging 3h20m   Parked 17h55m
-  2026-07-20  Mowing 1h00m [Front Lawn]   Mowing 45m [Back Yard]   Charging 21h15m
-```
-
-`Charging`+`Parked` together are "time spent at the charger" (`CHARGING` and
-`PARKED_IN_CS` combined — the activity label alone is an unreliable signal
-for whether real charging is happening, not split further on that axis).
-What *does* split them: the poll where `track` observes battery reach 100%
-(see `` `track`: adaptive polling and logging `` above) marks the boundary —
-`Charging` is arrival → that point, `Parked` is that point → the mower
-leaving again (charged, but no longer actively charging). A stay that never
-reaches 100% before leaving (or is still ongoing) counts entirely as
-`Charging`, with no `Parked` portion — "still charging" as far as the data
-can tell; `Parked` is omitted from the line entirely when zero, same as
-`Charging`/`Mowing` being omitted when a day has none. Other activities
-(`Going home`, `Leaving`, `Stopped`, ...) aren't represented — only the
-totals that were asked for.
-
-**A session counts entirely toward the day it *started*** — same
-simplification `sessions` already makes for its own single date column, not
-something `daily` adds on top. This matters most for an *ongoing* session:
-if the mower has been parked at the charger since yesterday afternoon and
-still is, that entire (and growing) duration shows up under yesterday's
-date, which can legitimately read as more than 24 hours — that's real
-elapsed time for one continuous session, not a bug. Splitting a
-session's duration across the midnight boundary it crosses would be more
-literally accurate but adds real complexity; not done unless it turns out
-to matter in practice.
-
-### `calendar` vs `planner`
-
-Two related but different things show up throughout this tool:
-
-- **`calendar`** — the static, user-configured recurring schedule (what you
-  set up in the app): a list of tasks, each with a start time, duration,
-  which weekdays it applies to, and which work area. This is what
-  `workarea`/`schedule` display, and what `sessions --calendar`'s "next
-  calendar start" is computed from.
-- **`planner`** — the mower's live, computed next-action state, derived
-  *from* the calendar plus real-time factors (battery, restrictions,
-  manual overrides). Its `nextStartTimestamp` is "next planned start" —
-  it can differ from a naive calendar lookup, since the mower's own
-  decision-making can push the actual next start later (or, in principle,
-  earlier) than what the calendar alone would suggest.
-
-`schedule [mower]` shows both: the calendar (refreshed into
-`.data/schedule.json`), plus the live "Next calendar start" / "Next planned
-start" pair and any active `restrictedReason`.
-
-### Running `track` unattended (e.g. over SSH / `docker exec`)
-
-`track` is meant to run for hours or days at a stretch, so it shouldn't
-depend on a terminal staying open. If it's just started in a plain shell
-over SSH or `docker exec`, a dropped connection can kill it along with the
-shell (behavior varies, and isn't something to rely on either way).
-
-Run it inside `tmux` (or `screen`) instead — a terminal multiplexer that
-keeps the session (and anything running in it) alive on the server
-independent of your connection. You attach to interact with it and detach
-to leave it running in the background; reattach later, even from a
-different connection, to check on it or stop it:
-
-```
-tmux new -s automower       # start a named session
-./am.sh track                # run track inside it
-# detach without stopping it: Ctrl+b, then d
-
-tmux attach -t automower    # reattach later to check on it or Ctrl+C it
-```
-
-One session per mower if you're running `track` for more than one at a
-time (`tmux new -s automower-405x`, etc. — see **Commands** for the
-`[mower]` override).
-
-**Deleting a tmux session** once you're done with it — two ways:
-
-- From inside it: stop `track` first (Ctrl+C), then exit the shell
-  (`exit` or Ctrl+D). A tmux session closes itself automatically once the
-  last program running inside it exits — there's nothing extra to delete.
-- From outside it, without attaching (e.g. you just want to kill it and
-  don't care about the summary output):
-
-  ```
-  tmux ls                          # list sessions, confirm the name
-  tmux kill-session -t automower   # force-delete it, whatever's running inside dies too
-  ```
-
-  `tmux kill-session` doesn't stop `track` gracefully first — it's the
-  tmux equivalent of closing the terminal window, so treat it like the
-  `kill -9` fallback further up: your log data is still safe (flushed
-  after every poll), you just won't get the clean summary line.
-
-**`startall.sh` / `stopall.sh`** automate the above for every mower on the
-account at once (one tmux session per mower, named `automower-<model
-prefix>` — the part of the mower's name before the first space, e.g.
-`automower-AM430X` for "AM430X NERA" — relying on the CLI's existing
-name-contains matching to resolve that shortened form back to the full
-mower; only safe while each model prefix is unique across the account, true
-for the current 3):
-
-```
-./startall.sh   # one detached tmux session per mower, each running 'track'
-./stopall.sh    # Ctrl+C into each session so 'track' stops gracefully,
-                 # force-kills anything still around after a few seconds
-```
-
-`startall.sh` fetches the mower list first if `.data/mowers.json` doesn't
-exist yet, and skips any mower whose session is already running rather than
-starting a duplicate — safe to re-run. Check on things afterward the normal
-tmux way (`tmux ls`, `tmux attach -t automower-<mower name>`).
+`track` polls each mower and logs to `.data/track-<mower name>.jsonl`;
+`sessions`/`daily` summarize that log; `seasons`/`baseline` track
+season-over-season lifetime-statistics growth. Adaptive polling intervals,
+the `calendar` vs `planner` distinction, and running `track` unattended
+(tmux, `startall.sh`/`stopall.sh`) are all covered in
+**[`docs/tracking.md`](docs/tracking.md)**.
 
 ## Config and generated files
 
@@ -341,8 +142,12 @@ wipes `bin/`/`obj/`) never touches either of them. Both are gitignored.
 | `.config/config.json` | App key/secret + `track` interval settings (via `config`) |
 | `.data/mowers.json` | Cached list of mowers on the account (from `list`) |
 | `.data/state.json` | The active mower selection (from `use`) |
-| `.data/schedule.json` | Cached per-mower calendar, keyed by mower id (from `schedule` or `track`) |
+| `.data/schedule-<mower name>.json` | Cached calendar, one file per mower (from `schedule` or `track`) |
 | `.data/track-<mower name>.jsonl` | Append-only log of polls from `track`, one file per mower |
+| `.data/statistics-<mower name>.jsonl` | One end-of-day lifetime-statistics snapshot per day, one file per mower (`seasons`/`baseline`) |
+
+A SQLite-backed storage alternative also exists (feature branch) - see
+[`docs/database-schema.md`](docs/database-schema.md).
 
 ## Security note
 
@@ -397,7 +202,7 @@ the other.
 - `am.cmd` / `am.sh` — shortcuts that build `AutomowerConsole.csproj` once
   and then run the compiled `.dll` directly (not `dotnet run` — see above)
 - `startall.sh` / `stopall.sh` — start/stop one tmux `track` session per
-  mower (see **Running `track` unattended** above)
+  mower (see [`docs/tracking.md`](docs/tracking.md))
 - `startweb.sh` / `stopweb.sh` — start/stop `AutomowerWeb` in a detached
   tmux session (see **Web dashboard** below)
 - `bootstrap.sh` / `fix-permissions.sh` — one-time container provisioning
@@ -408,221 +213,25 @@ Run the tests with `dotnet test`.
 
 ## Web dashboard (`AutomowerWeb`)
 
-A read-only Blazor Server app: a `/` dashboard (live status per mower —
-activity, battery, work area, connected, next start, location, weather —
-plus that mower's sessions from *today only* and a 7-day rollup) and a
-`/mower/{name}` details page per mower (the same status facts up top, plus
-full session history, daily rollup, work areas, stay-out zones, schedule,
-recent messages, settings/capabilities, and lifetime operation statistics
-at the bottom). No login yet, and deliberately no mower control anywhere in
-it — an unauthenticated public control surface for a physical outdoor
-device is a different risk class than an unauthenticated read-only
-dashboard, and hasn't been asked for.
+A read-only Blazor Server app: a `/` dashboard (live status per mower) and
+a `/mower/{name}` details page per mower (full session history, work
+areas, schedule, lifetime statistics, seasons, and more). Run locally with
+`dotnet run --project AutomowerWeb` (default `http://localhost:5152`).
+Full details — QNAP deployment via `startweb.sh`, dev mode, the
+no-auto-refresh design decision — in
+**[`docs/web-dashboard.md`](docs/web-dashboard.md)**.
 
-**Location and weather** are derived from each mower's own latest GPS
-position (`positions[0]` in the API response - absent for a mower with no
-GPS fix, in which case those two rows are just omitted). Two free, keyless
-external services, called server-side: OpenStreetMap's **Nominatim** for
-reverse geocoding (place name cached indefinitely per mower - a charging
-station doesn't move meter-to-meter between polls) and **Open-Meteo** for
-current weather (cached 20 minutes, since it actually changes). This means
-`AutomowerWeb` needs outbound internet access to those two hosts, in
-addition to Husqvarna's own API - true for local dev, and something to keep
-in mind once it's running somewhere with more restricted egress.
+## Documentation
 
-Run it locally the same way as any ASP.NET project, from the repo root so
-it can see `.config`/`.data`:
+This README covers local setup and day-to-day CLI usage. Deeper/deployment
+topics live in `docs/`:
 
-```
-dotnet run --project AutomowerWeb
-```
-
-then open the URL it prints (default `http://localhost:5152`).
-
-**On the QNAP container, run it via `startweb.sh`/`stopweb.sh`** instead of
-a plain `dotnet run` you'd have to babysit in a terminal — same pattern as
-`startall.sh`/`stopall.sh` for `track`: a detached tmux session that
-survives an SSH disconnect, publishing once (`dotnet publish -c Release`,
-not `dotnet build` — see the comment in `startweb.sh` for why: this app
-needs a real physically-copied `wwwroot`, which only `publish` produces)
-and running the published `.dll` directly (not `dotnet run`, for the same
-graceful-Ctrl+C-forwarding reason as `am.sh`). Bound to all interfaces
-(`0.0.0.0:5152` by default, `./startweb.sh <port>` to override) so it's
-reachable from outside the container, not just `localhost`:
-
-```
-./startweb.sh          # publishes (Release), starts in tmux session "automowerweb"
-./stopweb.sh            # graceful stop (Ctrl+C, falls back to force-kill)
-```
-
-**`startweb.dev`/`stopweb.dev`** are the same thing in
-`ASPNETCORE_ENVIRONMENT=Development` (a real exception page instead of a
-generic error — useful while debugging; `-c Debug` publish, faster than
-Release) instead of Production. Same tmux session name as `startweb.sh` —
-they're two alternate ways to run the same app, not meant to run at once.
-**Not safe to expose beyond a LAN/SSH tunnel** — Development mode leaks
-stack traces on any unhandled exception.
-
-**If you rebuild/pull new code, `startweb.sh` won't pick it up on its
-own** — a tmux session that's already running keeps whatever was loaded in
-memory when it started, same as any other long-running process here (see
-`track`'s equivalent gotcha above). Run `./stopweb.sh` then `./startweb.sh`
-to actually restart it on the new build; `./startweb.sh` alone just says
-"already running" and does nothing if a session already exists under that
-name.
-
-**No auto-refresh timer on the dashboard, by design.** It's a 4th
-independent process authenticating with the same Husqvarna app key/secret
-as the 3 `track` sessions (see `AutomowerConsole`'s `startall.sh` notes on
-Husqvarna's `simultaneous.logins` rejection) — a background poll loop would
-add another recurring source of auth traffic for a dashboard nobody's
-continuously watching. It loads once per page visit and on an explicit
-"🔄 Refresh" click instead.
-
-## Public deployment
-
-The dashboard is live at `https://Terje-TS673A.myqnapcloud.com/` — see
-`qnap_infrastructure_setup.md` for the QNAP-specific provisioning steps,
-and `Caddyfile` for the reverse-proxy config:
-
-```
-Internet --(Altibox: forward 80->8880, 443->8443 only, not the router's
-             "DMZ" feature, which forwards everything unfiltered and would
-             expose the QNAP's own admin UI/SSH too)--> QNAP LAN IP:8880/8443
-    --> [Caddy container]  (the only container with published host ports)
-            reverse_proxy --> <qnap-lan-ip>:5152 --> [AutomowerWeb container]
-```
-
-- **`AutomowerWeb` gets its own container**, separate from the one running
-  `track` — a public web server's crashes/restarts/attack surface
-  shouldn't share a blast radius with the always-on mower tracking. Both
-  bind-mount the same `/repos/Automower` host path, so both see the same
-  `.config`/`.data` and git checkout.
-- **`Caddy`** (official `caddy:latest` image) terminates TLS and gets
-  automatic Let's Encrypt certificates — see `Caddyfile`'s own comments for
-  the required `AUTOMOWER_HOSTNAME`/`AUTOMOWER_UPSTREAM` env vars and why
-  the upstream target is the QNAP's LAN IP, not `localhost` (which inside a
-  container means that container, not the host or a sibling container).
-  Published on host ports **8880/8443**, not the standard 80/443 — QTS's own
-  admin interface already holds 443 on this NAS (confirmed via `netstat` on
-  the host before creating the container). Caddy itself doesn't care what
-  port traffic arrives on, so the Altibox forward just maps external 80/443
-  to these instead — Let's Encrypt's HTTP-01 challenge only needs the
-  *external* ports to be 80/443, not the internal ones.
-- **Hostname**: `Terje-TS673A.myqnapcloud.com` (free `myQNAPcloud` DDNS —
-  the NAS's one primary device hostname, not something per-service) — a
-  `hermit.no` subdomain remains an easy upgrade later if wanted.
-- **No authentication, deliberately** — the only data exposed is already
-  coarse/low-stakes: activity, battery, mower model/serial, and a
-  municipality-level place name (`LocationService` reverse-geocodes to
-  `zoom=12`, e.g. "Asker, Norway" — not precise enough to locate the
-  property), no controls. `Caddyfile` has a one-line `basicauth` upgrade
-  path commented in, ready whenever it's wanted, without touching
-  `AutomowerWeb` itself.
-- **Serving a second site later doesn't need a new container, port, or
-  router rule** — Caddy already owns the only forwarded ports (8880/8443)
-  and dispatches by hostname/path to as many backends as wanted. The free
-  myQNAPcloud name is one hostname per NAS, not per app, but a second site
-  can share it via a path (`terje-ts673a.myqnapcloud.com/otherapp/`) or get
-  its own hostname (e.g. a `hermit.no` subdomain) pointed at the same
-  public IP — either way it's just another block in `Caddyfile`, which gets
-  its own automatic Let's Encrypt cert with no extra config. See
-  `Caddyfile`'s own comments for both patterns.
-
-## Connecting to the QNAP container over SSH
-
-The account's long-running `track` sessions (and, for now, ad hoc testing of
-`AutomowerWeb`) live in a Debian container on a QNAP NAS. Getting a shell
-there is two hops, easy to conflate:
-
-1. **The QNAP host itself** — plain SSH, lands in the NAS's own OS, not the
-   container:
-
-   ```
-   ssh <user>@<qnap-ip>
-   ```
-
-2. **Into the container, at the repo directory** — from that host shell:
-
-   ```
-   docker exec -it -w /repos/Automower <container-name-or-id> bash
-   ```
-
-   Combine both into one command from your own machine:
-
-   ```
-   ssh <user>@<qnap-ip> -t "docker exec -it -w /repos/Automower <container-name-or-id> bash"
-   ```
-
-   `docker` isn't on `PATH` for a non-interactive shell like that `-t`
-   invocation (only for an interactive login shell) — if you get
-   `docker: command not found`, use the full path instead of a bare
-   `docker`, e.g. `/share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker`
-   (varies by QNAP volume label - `which docker` from an interactive host
-   login finds it).
-
-   Worth saving as an SSH config alias so it's just `ssh automower`. **This
-   file lives on your own machine — wherever you run `ssh` *from* — not on
-   the QNAP or inside the container**, since it configures your local SSH
-   client's behavior, not anything remote:
-
-   ```
-   # ~/.ssh/config  (on your own machine, e.g. C:\Users\<you>\.ssh\config on Windows)
-   Host automower
-       HostName <qnap-ip>
-       User <user>
-       RemoteCommand /share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker exec -it -w /repos/Automower <container-name-or-id> bash
-       RequestTTY yes
-   ```
-
-   Full `docker` path again here for the same reason as above — `RemoteCommand`
-   runs the same way as `ssh host -t "command"`, so a bare `docker` won't
-   resolve.
-
-The container's ID is stable across stop/start, but **changes if the
-container is ever recreated** — update any saved alias if that happens.
-
-### Testing `AutomowerWeb` from your own machine via an SSH tunnel
-
-Useful when you want to check something in a browser without exposing any
-port on the QNAP/router — e.g. verifying a change works on the container
-before it's worth setting up real LAN/internet-facing access, or any time
-you don't want to touch the running container's network config just to look
-at something. Tunnel straight to the container's internal IP through the
-QNAP host as the relay (find the container's IP in Container Station → Edit
-Container → Network):
-
-```
-ssh -L <local-port>:<container-ip>:5152 <user>@<qnap-ip>
-```
-
-e.g., with this account's actual values (container IP from Container Station
-→ Edit Container → Network, `15152` as the local port since `5152` was
-already taken by a locally-running copy of the app):
-
-```
-ssh -L 15152:10.0.3.2:5152 terje@192.168.10.142
-```
-
-then browse to `http://127.0.0.1:<local-port>` (use the literal
-`127.0.0.1`, not `localhost` — Windows OpenSSH's `-L` sometimes only binds
-the IPv4 loopback, while `localhost` can resolve to `::1` first and find
-nothing listening). Pick a local port that isn't already in use by a copy
-of the app running directly on your own machine.
-
-**The tunnel only exists while that SSH session stays connected.** Closing
-the terminal (or it disconnecting for any reason) silently kills the
-forward — the browser will just fail to load with no obvious explanation,
-since nothing about the failure mentions the tunnel at all. If the
-dashboard was working and then suddenly isn't, check whether that terminal
-is still open before troubleshooting anything else.
-
-If this fails with `channel N: open failed: administratively prohibited`,
-the QNAP's sshd has `AllowTcpForwarding` disabled — see
-`qnap_infrastructure_setup.md` for the fix (and why the obvious fix, editing
-`/etc/ssh/sshd_config`, doesn't work on this QNAP).
-
-For deeper QNAP/Container Station operational notes (timezone, port
-mapping, this SSH forwarding issue) see `qnap_infrastructure_setup.md`. For
-API implementation notes (auth flow, endpoint quirks, timestamp units,
-external references) see `.claude/skills/automower-api/SKILL.md`.
+| Doc | Covers |
+|---|---|
+| [`docs/tracking.md`](docs/tracking.md) | `track` polling intervals, `sessions`/`daily`/`seasons`, `calendar` vs `planner`, running `track` unattended |
+| [`docs/web-dashboard.md`](docs/web-dashboard.md) | `AutomowerWeb` — pages, external services, running it locally and on the QNAP container |
+| [`docs/database-schema.md`](docs/database-schema.md) | SQLite storage backend schema (mermaid ER diagrams) |
+| [`docs/deployment.md`](docs/deployment.md) | Public deployment architecture (Caddy, TLS, hostname, no-auth decision) |
+| [`docs/qnap-access.md`](docs/qnap-access.md) | Getting a shell on the QNAP container over SSH, SSH-tunnel testing |
+| [`docs/qnap_infrastructure_setup.md`](docs/qnap_infrastructure_setup.md) | Deeper QNAP/Container Station operational notes (timezone, port mapping, SSH forwarding) |
+| [`.claude/skills/automower-api/SKILL.md`](.claude/skills/automower-api/SKILL.md) | API implementation notes — auth flow, endpoint quirks, timestamp units, WebSocket research |
