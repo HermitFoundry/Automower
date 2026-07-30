@@ -11,4 +11,10 @@
         <InternalsVisibleTo Include="AutomowerConsole.Tests" />
     </ItemGroup>
 
+    <ItemGroup>
+      <PackageReference Include="Dapper" Version="2.1.79" />
+      <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
+      <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
+    </ItemGroup>
+
 </Project>
