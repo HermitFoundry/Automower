@@ -82,6 +82,9 @@ switch (command)
     case "baseline":
         await CommandBaseline(rest);
         break;
+    case "migrate-to-sqlite":
+        await CommandMigrateToSqlite(rest);
+        break;
     case "help":
     case "-h":
     case "--help":
@@ -804,6 +807,105 @@ async Task CommandBaseline(string[] baselineArgs)
     Console.WriteLine("'seasons' will anchor this as that season's start, regardless of the gap to whatever real data follows it.");
 }
 
+// One-time migration from the JSONL-backed storage (Storage.GetTrackLogPath/
+// GetEventLogPath/etc.) to the new SQLite-backed one (Storage.GetMowerDbPath),
+// per the 2026-07-30 storage-migration plan - dev-checkout-only tool, not
+// part of the normal running app. Constructs both repositories directly
+// (JsonlMowerRepository as the read-only source, SqliteMowerRepository as the
+// destination) rather than through mowerRepositoryFactory, since that's
+// whichever one is currently wired up in DI, not necessarily "one of each".
+//
+// track-<mower>.jsonl/events-<mower>.jsonl are read line-by-line directly
+// here (not via JsonlMowerRepository.GetHistory(), which returns already-
+// parsed PollRecords) - migration needs each line's raw, unprocessed payload
+// (the exact thing RawEvents exists to preserve), not a derived view of it.
+async Task CommandMigrateToSqlite(string[] migrateArgs)
+{
+    var resolved = await mowerService.ResolveMowerAsync(migrateArgs.FirstOrDefault());
+    if (resolved is null) return;
+    var (_, mowerName) = resolved.Value;
+
+    var source = new JsonlMowerRepository(mowerName);
+    var destination = new SqliteMowerRepository(mowerName);
+
+    var trackCount = 0;
+    var trackSkipped = 0;
+    var trackPath = Storage.GetTrackLogPath(mowerName);
+    if (File.Exists(trackPath))
+    {
+        foreach (var line in File.ReadLines(trackPath))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+                var timestamp = root.GetProperty("timestamp").GetDateTimeOffset();
+                var responseJson = root.GetProperty("response").GetRawText();
+                await destination.RecordAsync(timestamp, "rest", responseJson);
+                trackCount++;
+            }
+            catch (Exception)
+            {
+                trackSkipped++;
+            }
+        }
+    }
+    Console.WriteLine($"Migrated {trackCount} REST poll(s) from {trackPath}{(trackSkipped > 0 ? $" ({trackSkipped} malformed line(s) skipped)" : "")}.");
+
+    var eventCount = 0;
+    var eventSkipped = 0;
+    var eventPath = Storage.GetEventLogPath(mowerName);
+    if (File.Exists(eventPath))
+    {
+        foreach (var line in File.ReadLines(eventPath))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+                var timestamp = root.GetProperty("timestamp").GetDateTimeOffset();
+                var message = root.GetProperty("message");
+                var messageJson = message.GetRawText();
+                var eventSource = message.TryGetProperty("ready", out _)
+                    ? "event:ready"
+                    : $"event:{message.GetProperty("type").GetString()}";
+                await destination.RecordAsync(timestamp, eventSource, messageJson);
+                eventCount++;
+            }
+            catch (Exception)
+            {
+                eventSkipped++;
+            }
+        }
+    }
+    Console.WriteLine($"Migrated {eventCount} WebSocket event(s) from {eventPath}{(eventSkipped > 0 ? $" ({eventSkipped} malformed line(s) skipped)" : "")}.");
+
+    var dailyStats = source.GetDailyStatisticsHistory();
+    foreach (var snapshot in dailyStats)
+    {
+        await destination.AppendDailyStatisticsAsync(snapshot);
+    }
+    Console.WriteLine($"Migrated {dailyStats.Count} daily statistics snapshot(s).");
+
+    var tasks = source.GetSchedule();
+    if (tasks.Length > 0)
+    {
+        destination.SaveSchedule(tasks);
+        Console.WriteLine($"Migrated cached schedule ({tasks.Length} task(s)).");
+    }
+
+    var mowers = mowerRegistry.LoadMowers();
+    if (mowers is { Count: > 0 })
+    {
+        new SqliteMowerRegistry().SaveMowers(mowers);
+        Console.WriteLine($"Migrated mower registry ({mowers.Count} mower(s)) into the common db.");
+    }
+
+    Console.WriteLine($"Done. SQLite db: {Storage.GetMowerDbPath(mowerName)}");
+}
+
 // Same convention as AutomowerWeb's MowerDisplay.LifetimeDuration/Distance
 // (plain hours with thousands separators, km once >=1000m) - matches how
 // Husqvarna's own app presents these lifetime counters. Duplicated here
@@ -880,6 +982,10 @@ void PrintUsage()
                                                  (e.g. the mower's actual purchase date) so 'seasons' has
                                                  a real day-zero to diff against, instead of starting
                                                  mid-lifetime from whenever this tool first tracked it.
+          automower migrate-to-sqlite [mower]    Dev tool: one-time migration of a mower's JSONL-backed
+                                                 storage (track/events/statistics/schedule) into the new
+                                                 SQLite-backed storage (see docs/database-schema.md).
+                                                 Read-only against the JSONL source - safe to re-run.
           automower help                        Show this help
         """);
 }
