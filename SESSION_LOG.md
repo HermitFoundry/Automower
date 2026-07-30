@@ -117,11 +117,61 @@ print `Storage.GetMowerDbPath` throughout. `README.md`/`docs/database-
 schema.md`/`docs/tracking.md` were also still framing SQLite as a
 "feature branch alternative" instead of the current default - fixed.
 
-**Next up, not started yet:** `README.md` still describes this as "a
-small C# console client" and needs restructuring around what it actually
-is now (web dashboard as the primary interface, then CLI, then
-installation/design/details) - flagged by the user, outline agreed, not
-yet written.
+**Repo durability pass**, prompted by the user asking what would be lost
+closing and reopening this Claude Code session. Three gaps closed: the
+SQLite/hybrid-tracking plan only existed in Claude Code's local, per-machine
+plan cache (`C:\Users\...\.claude\plans\cozy-sauteeing-sky.md`) - copied
+into `.claude/plans/sqlite-and-hybrid-tracking-migration.md` so it survives
+a machine change, not just a session restart. QNAP operational knowledge
+(SSH two-hop access, `docker` not on `PATH` for non-interactive shells, the
+`/repos` vs `/share/Repos` host/container path trap, the nested-quoting
+workaround of piping a scratchpad script through stdin) existed only as
+narrative in `docs/qnap_infrastructure_setup.md` - added a dedicated
+`.claude/skills/qnap-ops/SKILL.md` alongside it, the operational
+counterpart to that doc, triggered automatically by a Claude Code session
+rather than needing to be found by hand. And a repo-root `CLAUDE.md` now
+gives a fresh session a way to self-confirm it picked up this repo's
+context after a restart (answers "Who are you?" with a fixed identity
+string, per the user's request).
+
+**README restructuring, finally done.** The outline from the "Next up"
+note below was agreed and executed: `README.md` now leads with "What this
+is" and a full "Web dashboard" section (the primary interface now, not an
+afterthought), and CLI/installation/design/configuration each get a short
+intro plus a link out to a new `docs/` page (`cli-usage.md`,
+`installation.md`, `design.md`, `configuration.md`) instead of being
+inlined. No longer reads as "a small C# console client."
+
+**Coverage map: dot size tuned, and a real cross-area color-mixing bug
+found and fixed.** The user first asked for the coverage dots to be a
+quarter their size (`r="0.3"` -> `r="0.075"`), then - after looking at
+AM430X NERA's map - reported them too small and asked to double them
+(`r="0.15"`), and separately flagged that "oversiden" now showed dots in
+three colors (green/violet/brown) mixed together, recalling that "we had a
+protection for that earlier."
+
+That protection was real and specific: `CoverageService`'s own comment
+already documented it - under REST-only polling, a poll's `WorkAreaId` and
+`Latitude`/`Longitude` always came from the same atomic snapshot, so
+pairing them for area-colored plotting was always safe. Hybrid-track
+quietly broke that guarantee without anyone noticing at the time: a
+`position-event-v2` row only carries a fresh GPS fix, so its `WorkAreaId`
+in the reconstructed `PollRecord` is whatever a `mower-event-v2` last set -
+potentially several minutes stale, long enough to span a real work-area
+change. The result: GPS fixes genuinely inside "oversiden" got plotted in
+whatever color a stale, carried-forward `WorkAreaId` said, bleeding other
+areas' colors into it.
+
+Fixed at the source rather than papered over in the UI: `PollRecord` gained
+`WorkAreaIdObservedAt` (the timestamp of whichever observation actually
+last set `WorkAreaId` - identical to the poll's own timestamp for a REST
+row, since those are always atomic; tracked as a separate running value in
+`SqliteMowerRepository.GetHistory()`'s carry-forward scan for hybrid-
+tracked rows). `CoverageService` now skips a point if its `WorkAreaId` is
+more than 5 minutes stale relative to its own timestamp - restores the old
+atomicity guarantee approximately, trading a little point density near real
+transitions for not mislabeling points into the wrong area's color. User
+confirmed correct after redeploy.
 
 ## 2026-07-29
 
