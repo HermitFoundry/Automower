@@ -635,7 +635,7 @@ async Task CommandSessions(string[] sessionArgs)
     var sessions = trackingService.SummarizeSessions(mowerName, showCalendar);
     if (sessions.Count == 0) return;
 
-    Console.WriteLine($"Sessions for {mowerName} (newest first, from {Storage.GetTrackLogPath(mowerName)}):");
+    Console.WriteLine($"Sessions for {mowerName} (newest first, from {Storage.GetMowerDbPath(mowerName)}):");
     foreach (var s in sessions)
     {
         var endLabel = s.End is null ? "ongoing" : s.End.Value.ToString("HH:mm", CultureInfo.InvariantCulture);
@@ -690,7 +690,7 @@ async Task CommandDaily(string[] dailyArgs)
     var days = trackingService.SummarizeDailyActivity(mowerName);
     if (days.Count == 0) return;
 
-    Console.WriteLine($"Daily activity for {mowerName} (newest first, from {Storage.GetTrackLogPath(mowerName)}):");
+    Console.WriteLine($"Daily activity for {mowerName} (newest first, from {Storage.GetMowerDbPath(mowerName)}):");
     foreach (var day in days)
     {
         var parts = day.Mowing.Select(m => m.WorkAreaName is null
@@ -720,7 +720,7 @@ async Task CommandMonthly(string[] monthlyArgs)
     var months = trackingService.SummarizeMonthlyActivity(mowerName);
     if (months.Count == 0) return;
 
-    Console.WriteLine($"Monthly activity for {mowerName} (newest first, from {Storage.GetTrackLogPath(mowerName)}):");
+    Console.WriteLine($"Monthly activity for {mowerName} (newest first, from {Storage.GetMowerDbPath(mowerName)}):");
     foreach (var month in months)
     {
         var parts = month.Mowing.Select(m => m.WorkAreaName is null

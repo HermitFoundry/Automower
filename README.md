@@ -93,7 +93,7 @@ selection.
 |---|---|
 | `config` | Show current config values (secrets masked) |
 | `config Key=Value ...` | Set one or more config values, e.g. `config AppKey=xxx AppSecret=yyy` |
-| `list` | Fetch and list all mowers on the account, save to `.data/mowers.json` |
+| `list` | Fetch and list all mowers on the account, save to the mower registry (`.data/common.db`) |
 | `use <name\|id\|index>` | Set the active mower (stored in `.data/state.json`) |
 | `current` | Show the currently active mower |
 | `status [--all] [mower]` | Show current status; `--all` dumps the full raw JSON payload |
@@ -103,11 +103,13 @@ selection.
 | `workarea <name\|id> [mower]` | Detailed info for one work area, including its schedule |
 | `stayoutzones [mower]` | List configured stay-out zones |
 | `schedule [mower]` | Show the calendar, refresh the cached per-mower schedule, and show the live next calendar/planned start |
-| `track [seconds] [mower]` | Adaptive-interval polling with logging to a per-mower `.data/track-<mower>.jsonl` (see [`docs/tracking.md`](docs/tracking.md)) |
-| `sessions [--calendar] [mower]` | Summarize a mower's track log into one line per mowing/charging/etc. session |
+| `hybrid-track [mower]` | **Default tracker** (what `startall.sh` runs) - WebSocket events drive live status with near-instant precision, a slow REST refresh keeps statistics/schedule current. Logs to `.data/mower-<name>.db` (see [`docs/database-schema.md`](docs/database-schema.md)) |
+| `track [seconds] [mower]` | The original adaptive-interval REST-only poller (see [`docs/tracking.md`](docs/tracking.md)) - still available, also logs to `.data/mower-<name>.db` now, just without event-driven precision |
+| `sessions [--calendar] [mower]` | Summarize a mower's history into one line per mowing/charging/etc. session |
 | `daily [mower]` | One line per calendar day: total Mowing time per work area, then Charging and Parked time |
 | `seasons [mower]` | Season-over-season growth in lifetime running/cutting/charging time, charging cycles, blade usage, and drive distance |
 | `baseline <YYYY-MM-DD> [mower]` | Seed an all-zero daily-statistics record on a past date (e.g. a mower's purchase date) so `seasons` has a real day-zero to diff against |
+| `migrate-to-sqlite [mower]` | One-time dev tool: migrates a mower's old JSONL-backed history into SQLite (already run for all 3 mowers as of the 2026-07-30 cutover) |
 | `help` | Show usage |
 
 ### Examples
@@ -122,13 +124,15 @@ am messages
 am track                    # start adaptive polling for the active mower
 ```
 
-## `track`, `sessions`, `daily`, `seasons`
+## `hybrid-track`, `track`, `sessions`, `daily`, `seasons`
 
-`track` polls each mower and logs to `.data/track-<mower name>.jsonl`;
-`sessions`/`daily` summarize that log; `seasons`/`baseline` track
-season-over-season lifetime-statistics growth. Adaptive polling intervals,
-the `calendar` vs `planner` distinction, and running `track` unattended
-(tmux, `startall.sh`/`stopall.sh`) are all covered in
+`hybrid-track` (what `startall.sh` runs) and the original `track` both log
+each mower's history to its own SQLite db (`.data/mower-<name>.db` - see
+[`docs/database-schema.md`](docs/database-schema.md)); `sessions`/`daily`
+summarize that history; `seasons`/`baseline` track season-over-season
+lifetime-statistics growth. Adaptive polling intervals, the event-driven
+design, the `calendar` vs `planner` distinction, and running trackers
+unattended (tmux, `startall.sh`/`stopall.sh`) are all covered in
 **[`docs/tracking.md`](docs/tracking.md)**.
 
 ## Config and generated files
@@ -139,15 +143,16 @@ wipes `bin/`/`obj/`) never touches either of them. Both are gitignored.
 
 | Path | Contents |
 |---|---|
-| `.config/config.json` | App key/secret + `track` interval settings (via `config`) |
-| `.data/mowers.json` | Cached list of mowers on the account (from `list`) |
-| `.data/state.json` | The active mower selection (from `use`) |
-| `.data/schedule-<mower name>.json` | Cached calendar, one file per mower (from `schedule` or `track`) |
-| `.data/track-<mower name>.jsonl` | Append-only log of polls from `track`, one file per mower |
-| `.data/statistics-<mower name>.jsonl` | One end-of-day lifetime-statistics snapshot per day, one file per mower (`seasons`/`baseline`) |
+| `.config/config.json` | App key/secret + `track`/`hybrid-track` interval settings (via `config`) |
+| `.data/state.json` | The active mower selection (from `use`) - unaffected by the SQLite migration, still a plain file |
+| `.data/common.db` | Mower registry (from `list`) - see [`docs/database-schema.md`](docs/database-schema.md) |
+| `.data/mower-<mower name>.db` | One SQLite db per mower - raw + derived history, cached schedule, daily statistics. See [`docs/database-schema.md`](docs/database-schema.md) for the full schema |
 
-A SQLite-backed storage alternative also exists (feature branch) - see
-[`docs/database-schema.md`](docs/database-schema.md).
+**Legacy JSONL files** (`.data/mowers.json`, `.data/schedule-<mower>.json`,
+`.data/track-<mower>.jsonl`, `.data/events-<mower>.jsonl`,
+`.data/statistics-<mower>.jsonl`) predate the 2026-07-30 SQLite cutover -
+kept on disk as a historical record, but nothing reads or writes them
+anymore.
 
 ## Security note
 

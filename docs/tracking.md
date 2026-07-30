@@ -1,13 +1,25 @@
 # `track`: adaptive polling and logging
 
-`track` polls the mower's full status on an interval and appends one JSON
-line per kept poll to a per-mower log file, `.data/track-<mower name>.jsonl`
-(e.g. `.data/track-AM430X-NERA.jsonl`), so you can see exactly how much data
-a day of monitoring costs for that mower (the log file's size on disk is the
-answer). Each line is `{timestamp, mowerId, mowerName, bytes, response}`,
-where `response` is the complete raw API payload for that poll. Running
-`track` for multiple mowers in parallel (see **Running `track` unattended**
-below) writes to separate files — there's no combined log.
+**As of the 2026-07-30 cutover, `hybrid-track` is the default tracker** -
+WebSocket events drive live status with near-instant precision, a slow
+REST refresh keeps statistics/schedule current (see
+[`docs/database-schema.md`](database-schema.md) for the storage side, and
+`SESSION_LOG.md` for the design). `track` (described below) is the
+original, simpler REST-only poller - still available and still useful
+(e.g. if WebSocket connectivity is ever a problem), but no longer what
+`startall.sh` runs by default. Both log to the same place: each mower's own
+SQLite db, `.data/mower-<mower name>.db` (not the JSONL file this section
+originally described - kept below since the *polling behavior* it explains
+is unchanged, just the storage format underneath it).
+
+`track` polls the mower's full status on an interval and records one entry
+per kept poll to that mower's SQLite db, so you can see exactly how much
+data a day of monitoring costs for that mower (the db file's size on disk
+is a reasonable proxy - see `docs/database-schema.md`'s `RawEvents` table,
+which stores the complete raw API payload for that poll, same as this
+section always described, just in a different container). Running `track`
+for multiple mowers in parallel (see **Running `track` unattended** below)
+writes to separate per-mower dbs — there's no combined log.
 
 The polling interval adapts to what's actually happening, in this priority
 order:

@@ -69,7 +69,7 @@ public class TrackingService(ScheduleService schedule, IMowerRepositoryFactory r
     {
         var connect = AutomowerConnect.Instance;
         var repository = repositoryFactory.ForMower(mowerName);
-        var logPath = Storage.GetTrackLogPath(mowerName);
+        var logPath = Storage.GetMowerDbPath(mowerName);
         await connect.AuthenticateAsync();
 
         Console.WriteLine($"Tracking {mowerName}. Logging to {logPath}. Press Ctrl+C to stop.");
@@ -252,7 +252,7 @@ public class TrackingService(ScheduleService schedule, IMowerRepositoryFactory r
         var history = repositoryFactory.ForMower(mowerName).GetHistory();
         if (history.Polls.Count == 0)
         {
-            Console.WriteLine($"No track log found for {mowerName} at {Storage.GetTrackLogPath(mowerName)}.");
+            Console.WriteLine($"No track history found for {mowerName} at {Storage.GetMowerDbPath(mowerName)}.");
             return [];
         }
 

@@ -1,14 +1,17 @@
 namespace AutomowerConsole.Core;
 
-// Experimental: logs whatever the Husqvarna WebSocket event-push API
-// actually sends for one mower, over however long this runs - a genuine
-// "let's see what we get" data-gathering exercise (see SKILL.md's
-// "WebSocket / event-push API" section for the confirmed-usable research
-// this is built from), not a replacement for 'track' yet. Connection
-// mechanics (connect/reconnect/2h-proactive-reconnect/message-framing) live
-// in the shared MowerEventStream, used by this and the hybrid tracker
-// alike; this class only owns turning each message into a RecordAsync call
-// plus its own console diagnostics.
+// Standalone raw-event logger - logs whatever the Husqvarna WebSocket
+// event-push API actually sends for one mower, over however long this
+// runs (see SKILL.md's "WebSocket / event-push API" section for the
+// confirmed-usable research this is built from). Superseded as the
+// default tracker by HybridTrackingService (2026-07-30 cutover), which
+// records the exact same events as part of normal operation - kept around
+// as an independent raw-capture tool for debugging/research, not because
+// anything else still depends on it. Connection mechanics (connect/
+// reconnect/2h-proactive-reconnect/message-framing) live in the shared
+// MowerEventStream, used by this and the hybrid tracker alike; this class
+// only owns turning each message into a RecordAsync call plus its own
+// console diagnostics.
 public class EventTrackingService(IMowerRepositoryFactory repositoryFactory)
 {
     private readonly MowerEventStream _stream = new();
@@ -17,7 +20,7 @@ public class EventTrackingService(IMowerRepositoryFactory repositoryFactory)
     {
         var repository = repositoryFactory.ForMower(mowerName);
 
-        Console.WriteLine($"Event-tracking {mowerName} via WebSocket. Logging every event for this mower to {Storage.GetEventLogPath(mowerName)}. Press Ctrl+C to stop.");
+        Console.WriteLine($"Event-tracking {mowerName} via WebSocket. Logging every event for this mower to {Storage.GetMowerDbPath(mowerName)}. Press Ctrl+C to stop.");
         Console.WriteLine($"Reconnects automatically on any disconnect, and proactively every {MowerEventStream.ProactiveReconnectAfter.TotalHours:0}h.");
 
         var totalRecordCount = 0;
@@ -39,6 +42,6 @@ public class EventTrackingService(IMowerRepositoryFactory repositoryFactory)
             message => Console.WriteLine($"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}] {message}"),
             cancellationToken);
 
-        Console.WriteLine($"Stopped. {totalRecordCount} event(s) logged in total. Log file: {Storage.GetEventLogPath(mowerName)}");
+        Console.WriteLine($"Stopped. {totalRecordCount} event(s) logged in total. Log file: {Storage.GetMowerDbPath(mowerName)}");
     }
 }

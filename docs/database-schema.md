@@ -1,11 +1,15 @@
 # Database schema (SQLite storage backend)
 
-Part of the SQLite storage migration (feature branch, 2026-07-30) — see
-`SESSION_LOG.md` for the full design discussion. Behind the same
-`IMowerRepository`/`IMowerRegistry` interfaces the JSONL-backed
-implementation already used (`AutomowerConsole.Core/MowerRepository.cs`,
-`MowerRegistry.cs`), implemented by `SqliteMowerRepository`/
-`SqliteMowerRegistry` (`AutomowerConsole.Core/SqliteMowerRepository.cs`).
+The default storage backend as of the 2026-07-30 cutover — see
+`SESSION_LOG.md` for the full design discussion. Implemented as
+`SqliteMowerRepository`/`SqliteMowerRegistry`
+(`AutomowerConsole.Core/SqliteMowerRepository.cs`) behind the same
+`IMowerRepository`/`IMowerRegistry` interfaces
+(`AutomowerConsole.Core/MowerRepository.cs`, `MowerRegistry.cs`) the
+original JSONL-backed implementation used - `JsonlMowerRepository`/
+`JsonlMowerRegistry` are still valid implementations of those same
+interfaces (used by the `migrate-to-sqlite` tool, and available as a
+fallback), just no longer what the app runs on by default.
 
 ## Layout: one database per mower, plus one shared database
 
