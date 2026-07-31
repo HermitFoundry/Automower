@@ -292,6 +292,21 @@ a { color: var(--brand); }
 
 .coverage-dot { opacity: 0.75; }
 
+.coverage-transport-line {
+    fill: none;
+    stroke: #000;
+    stroke-width: 0.1;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: 0.6;
+}
+
+.coverage-current-dot {
+    opacity: 0.9;
+    stroke: #fff;
+    stroke-width: 0.03;
+}
+
 .coverage-legend {
     display: flex;
     flex-wrap: wrap;

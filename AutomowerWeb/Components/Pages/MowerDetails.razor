@@ -359,7 +359,10 @@ else if (_detail is not null && _stored is not null)
                 moved on, which showed up as real dots sitting outside their
                 own area. Not yet a computed boundary either, just the raw
                 dot density - already outlines the rough shape well enough
-                to look at.
+                to look at. The black line is the most recent trip in that
+                direction (leaving the charger, or heading home) - it's
+                replaced the next time the mower makes the same trip again,
+                not accumulated. The red dot is the mower's current position.
             </p>
             <div class="coverage-legend">
                 @foreach (var item in _coveragePlot.Legend)
@@ -369,9 +372,17 @@ else if (_detail is not null && _stored is not null)
             </div>
             <div class="coverage-map">
                 <svg viewBox="@_coveragePlot.ViewBox" xmlns="http://www.w3.org/2000/svg">
+                    @foreach (var line in _coveragePlot.TransportLines)
+                    {
+                        <polyline points="@line.Points" class="coverage-transport-line" />
+                    }
                     @foreach (var dot in _coveragePlot.Dots)
                     {
                         <circle cx="@dot.Cx" cy="@dot.Cy" r="0.15" class="coverage-dot" fill="@dot.ColorVar" />
+                    }
+                    @if (_coveragePlot.CurrentPosition is { } current)
+                    {
+                        <circle cx="@current.Cx" cy="@current.Cy" r="0.3" class="coverage-current-dot" fill="@current.ColorVar" />
                     }
                 </svg>
             </div>
@@ -437,7 +448,9 @@ else if (_detail is not null && _stored is not null)
             var workAreaNames = (_detail.Attributes.WorkAreas ?? [])
                 .ToDictionary(w => w.WorkAreaId, w => w.Name.Trim());
             var coverage = CoverageService.GetCoverageByWorkArea(_stored.Name);
-            _coveragePlot = MowerDisplay.BuildCoveragePlot(coverage, workAreaNames);
+            var transportPaths = CoverageService.GetLatestTransportPaths(_stored.Name);
+            var currentPosition = position is null ? (GpsPoint?)null : new GpsPoint(position.Latitude, position.Longitude);
+            _coveragePlot = MowerDisplay.BuildCoveragePlot(coverage, workAreaNames, transportPaths, currentPosition);
 
             var dailyStatistics = MowerRepositoryFactory.ForMower(_stored.Name).GetDailyStatisticsHistory()
                 .OrderBy(d => d.Date)

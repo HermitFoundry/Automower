@@ -357,7 +357,15 @@ public static class MowerDisplay
 
     public readonly record struct CoverageDot(double Cx, double Cy, string ColorVar);
     public readonly record struct CoverageLegendItem(string Name, string ColorVar, int Count);
-    public record CoveragePlot(string ViewBox, List<CoverageDot> Dots, List<CoverageLegendItem> Legend);
+
+    // Precomputed SVG polyline "points" attribute value (e.g. "1.23,4.56
+    // 7.89,1.01 ...") - built once here rather than re-joined in the Razor
+    // page, same reasoning as CoverageDot carrying already-rounded Cx/Cy.
+    public readonly record struct CoverageLine(string Points);
+
+    public record CoveragePlot(
+        string ViewBox, List<CoverageDot> Dots, List<CoverageLegendItem> Legend,
+        List<CoverageLine> TransportLines, CoverageDot? CurrentPosition);
 
     // Real GPS fixes recorded while actually mowing (CoverageService already
     // filtered to activity == "MOWING" - see its own comment on why: a poll
@@ -368,17 +376,35 @@ public static class MowerDisplay
     // script, not in the app) produced boundaries that visibly cut across
     // unrelated areas - the dot density alone already shows the rough shape
     // well enough to look at while that gets sorted out. One shared
-    // projection across all of a mower's work areas, so their real relative
-    // positions/sizes stay comparable to each other on one plot.
-    public static CoveragePlot BuildCoveragePlot(List<WorkAreaCoverage> coverage, IReadOnlyDictionary<long, string> workAreaNames)
+    // projection across all of a mower's work areas (and now the transport
+    // lines/current position too - see below), so everything's real
+    // relative positions/sizes stay comparable on one plot.
+    //
+    // transportPaths (CoverageService.GetLatestTransportPaths - already just
+    // the single most recent LEAVING run and most recent GOING_HOME run, not
+    // full history) become black polylines; currentPosition (the mower's
+    // live GPS fix, not anything from stored history - the Razor page
+    // passes MowerAttributes.Positions[0] directly) becomes a single red dot
+    // drawn on top of everything else.
+    public static CoveragePlot BuildCoveragePlot(
+        List<WorkAreaCoverage> coverage, IReadOnlyDictionary<long, string> workAreaNames,
+        List<TransportPath> transportPaths, GpsPoint? currentPosition)
     {
         var withPoints = coverage.Where(c => c.Points.Count > 0).ToList();
-        if (withPoints.Count == 0)
+        var transportWithPoints = transportPaths.Where(t => t.Points.Count > 0).ToList();
+        if (withPoints.Count == 0 && transportWithPoints.Count == 0 && currentPosition is null)
         {
-            return new CoveragePlot("0 0 1 1", [], []);
+            return new CoveragePlot("0 0 1 1", [], [], [], null);
         }
 
-        var allPoints = withPoints.SelectMany(c => c.Points).ToList();
+        // Bounding box has to cover everything that'll be plotted, not just
+        // the per-area dots - a transit line often reaches well outside the
+        // lawn area itself (e.g. all the way to the charging station), and
+        // the live position could be anywhere.
+        var allPoints = withPoints.SelectMany(c => c.Points)
+            .Concat(transportWithPoints.SelectMany(t => t.Points))
+            .Concat(currentPosition is { } cp ? [cp] : [])
+            .ToList();
         var lat0 = allPoints.Average(p => p.Lat);
         const double MetersPerDegLat = 111320.0;
         var metersPerDegLon = MetersPerDegLat * Math.Cos(lat0 * Math.PI / 180.0);
@@ -415,8 +441,23 @@ public static class MowerDisplay
             }
         }
 
+        var transportLines = transportWithPoints
+            .Select(t => new CoverageLine(string.Join(' ', t.Points.Select(p =>
+            {
+                var (x, y) = ToSvg(p);
+                return string.Create(CultureInfo.InvariantCulture, $"{x:F2},{y:F2}");
+            }))))
+            .ToList();
+
+        CoverageDot? currentPositionDot = null;
+        if (currentPosition is { } pos)
+        {
+            var (x, y) = ToSvg(pos);
+            currentPositionDot = new CoverageDot(Math.Round(x, 2), Math.Round(y, 2), "red");
+        }
+
         var viewBox = string.Create(CultureInfo.InvariantCulture,
             $"0 0 {maxX + (2 * Pad):F2} {svgHeight:F2}");
-        return new CoveragePlot(viewBox, dots, legend);
+        return new CoveragePlot(viewBox, dots, legend, transportLines, currentPositionDot);
     }
 }
