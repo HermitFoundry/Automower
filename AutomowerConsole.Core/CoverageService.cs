@@ -76,9 +76,9 @@ public class CoverageService(IMowerRepositoryFactory repositoryFactory)
     public List<TransportPath> GetLatestTransportPaths(string mowerName)
     {
         var history = repositoryFactory.ForMower(mowerName).GetHistory();
-        var result = new Dictionary<string, List<GpsPoint>>();
+        var result = new Dictionary<string, List<(DateTimeOffset Timestamp, GpsPoint Point)>>();
         string? currentActivity = null;
-        List<GpsPoint>? currentRun = null;
+        List<(DateTimeOffset, GpsPoint)>? currentRun = null;
 
         foreach (var poll in history.Polls)
         {
@@ -96,10 +96,56 @@ public class CoverageService(IMowerRepositoryFactory repositoryFactory)
                 currentRun = [];
                 result[poll.Activity] = currentRun;
             }
-            currentRun!.Add(new GpsPoint(poll.Latitude.Value, poll.Longitude.Value));
+            currentRun!.Add((poll.Timestamp, new GpsPoint(poll.Latitude.Value, poll.Longitude.Value)));
         }
 
-        return result.Select(kv => new TransportPath(kv.Key, kv.Value)).ToList();
+        return result.Select(kv => new TransportPath(kv.Key, TrimAfterImplausibleJump(kv.Value))).ToList();
+    }
+
+    // Same speed-based anomaly check already validated against this
+    // account's real mowing data (2026-07-29 - observed speeds topped out
+    // under 0.5 m/s across all three mowers, 1.5 m/s was chosen as a
+    // deliberately generous 3x margin with zero false positives) - reused
+    // here rather than inventing a new number. Once a jump is seen,
+    // everything from that point onward in the run is dropped rather than
+    // just the one point, since a GPS fix degraded by multipath (a
+    // charging dock is often close to a building) tends to stay degraded
+    // for the rest of that approach, not self-correct mid-run.
+    //
+    // Confirmed against a real case (AM430X NERA, 2026-07-31 GOING_HOME
+    // trip) that this doesn't catch every gap between a transit line and
+    // the current-position dot: every recorded step in that run stayed
+    // under 0.44 m/s, well under this threshold - the ~8.5m difference
+    // there turned out to be the mower's GPS reading drifting while
+    // sitting still at the dock for the better part of an hour afterward
+    // (a few centimeters per minute - no single step fast enough for any
+    // reasonable speed threshold to flag), not a jump during the trip
+    // itself. Kept anyway: a real, precedented protection against actual
+    // in-transit GPS jumps, just not a fix for slow drift after arrival.
+    private const double MaxPlausibleSpeedMetersPerSecond = 1.5;
+
+    private static List<GpsPoint> TrimAfterImplausibleJump(List<(DateTimeOffset Timestamp, GpsPoint Point)> run)
+    {
+        var kept = new List<GpsPoint>(run.Count) { run[0].Point };
+        for (var i = 1; i < run.Count; i++)
+        {
+            var seconds = (run[i].Timestamp - run[i - 1].Timestamp).TotalSeconds;
+            if (seconds > 0 && DistanceMeters(run[i - 1].Point, run[i].Point) / seconds > MaxPlausibleSpeedMetersPerSecond)
+            {
+                break;
+            }
+            kept.Add(run[i].Point);
+        }
+        return kept;
+    }
+
+    private static double DistanceMeters(GpsPoint a, GpsPoint b)
+    {
+        const double MetersPerDegLat = 111320.0;
+        var metersPerDegLon = MetersPerDegLat * Math.Cos((a.Lat + b.Lat) / 2.0 * Math.PI / 180.0);
+        var dx = (b.Lon - a.Lon) * metersPerDegLon;
+        var dy = (b.Lat - a.Lat) * MetersPerDegLat;
+        return Math.Sqrt((dx * dx) + (dy * dy));
     }
 }
 
