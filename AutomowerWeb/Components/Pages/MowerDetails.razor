@@ -24,7 +24,7 @@ else if (_detail is not null && _stored is not null)
 {
     var a = _detail.Attributes;
 
-    <div class="details-header">
+    <div class="details-header" id="top">
         <span class="mower-icon @MowerDisplay.IconClass(a.Mower.Activity)" title="@MowerDisplay.Title(a.Mower.Activity, a.Metadata.Connected)">@MowerDisplay.Icon(a.Mower.Activity, a.Metadata.Connected)</span>
         <h1>@_stored.Name</h1>
     </div>
@@ -71,6 +71,7 @@ else if (_detail is not null && _stored is not null)
 
     var pagePath = $"/mower/{Uri.EscapeDataString(Name)}";
     <nav class="detail-subnav">
+        <a href="@(pagePath + "#top")">⬆️ Top</a>
         <a href="@(pagePath + "#work-areas")">🗺️ Work areas</a>
         <a href="@(pagePath + "#stay-out-zones")">🚫 Stay-out zones</a>
         <a href="@(pagePath + "#schedule")">📅 Schedule</a>
