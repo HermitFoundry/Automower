@@ -147,6 +147,56 @@ public class CoverageService(IMowerRepositoryFactory repositoryFactory)
         var dy = (b.Lat - a.Lat) * MetersPerDegLat;
         return Math.Sqrt((dx * dx) + (dy * dy));
     }
+
+    // While the mower is stationary at the charger (CHARGING/PARKED_IN_CS -
+    // TrackingService.IsAtCharger), it isn't physically moving at all - any
+    // apparent movement between consecutive GPS readings during that stretch
+    // is receiver drift, not the mower relocating. The single latest live
+    // reading is therefore just as likely to be a drifted outlier as any
+    // other sample from that same stretch (confirmed against a real case,
+    // AM430X NERA 2026-07-31: readings wandered ~8.5m over the better part
+    // of an hour while genuinely motionless). Averaging every reading since
+    // the mower last arrived at the charger gives a far more stable
+    // estimate of where it actually is than trusting whichever single
+    // sample happens to be freshest.
+    //
+    // Returns null when the mower isn't currently at the charger - the
+    // caller should use the live position directly in that case, since
+    // averaging while actually moving would lag behind the real position
+    // rather than stabilize it.
+    public GpsPoint? GetStableChargerPosition(string mowerName, string currentActivity)
+    {
+        if (!TrackingService.IsAtCharger(currentActivity))
+        {
+            return null;
+        }
+
+        var history = repositoryFactory.ForMower(mowerName).GetHistory();
+        // A HashSet, not a List - history.Polls is the carry-forward-
+        // reconstructed view (see SqliteMowerRepository.GetHistory()), so
+        // most rows in this stretch just inherit whatever position the last
+        // real GPS reading set (e.g. a battery-only event carries the same
+        // Latitude/Longitude forward unchanged). Averaging the raw list
+        // would weight the result by how many unrelated events happened to
+        // fire while each real reading was "current" - noise, not signal.
+        // Deduplicating first means each genuinely distinct GPS sample
+        // counts exactly once.
+        var stretch = new HashSet<GpsPoint>();
+        for (var i = history.Polls.Count - 1; i >= 0; i--)
+        {
+            var poll = history.Polls[i];
+            if (!TrackingService.IsAtCharger(poll.Activity))
+            {
+                break;
+            }
+            if (poll.Latitude is not null && poll.Longitude is not null)
+            {
+                stretch.Add(new GpsPoint(poll.Latitude.Value, poll.Longitude.Value));
+            }
+        }
+
+        return stretch.Count == 0 ? null : new GpsPoint(stretch.Average(p => p.Lat), stretch.Average(p => p.Lon));
+    }
 }
 
 public record struct GpsPoint(double Lat, double Lon);

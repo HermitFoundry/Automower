@@ -449,7 +449,14 @@ else if (_detail is not null && _stored is not null)
                 .ToDictionary(w => w.WorkAreaId, w => w.Name.Trim());
             var coverage = CoverageService.GetCoverageByWorkArea(_stored.Name);
             var transportPaths = CoverageService.GetLatestTransportPaths(_stored.Name);
-            var currentPosition = position is null ? (GpsPoint?)null : new GpsPoint(position.Latitude, position.Longitude);
+            // While parked/charging the mower isn't moving at all, so the
+            // live GPS reading alone is just as likely to be a drifted
+            // outlier as any other sample from that same stationary stretch
+            // - use the averaged, stable position instead. Only falls back
+            // to the single live reading while actually moving, where an
+            // average would lag behind the real position.
+            var currentPosition = CoverageService.GetStableChargerPosition(_stored.Name, _detail.Attributes.Mower.Activity)
+                ?? (position is null ? (GpsPoint?)null : new GpsPoint(position.Latitude, position.Longitude));
             _coveragePlot = MowerDisplay.BuildCoveragePlot(coverage, workAreaNames, transportPaths, currentPosition);
 
             var dailyStatistics = MowerRepositoryFactory.ForMower(_stored.Name).GetDailyStatisticsHistory()
