@@ -69,18 +69,19 @@ else if (_detail is not null && _stored is not null)
         }
     </dl>
 
+    var pagePath = $"/mower/{Uri.EscapeDataString(Name)}";
     <nav class="detail-subnav">
-        <a href="#work-areas">🗺️ Work areas</a>
-        <a href="#stay-out-zones">🚫 Stay-out zones</a>
-        <a href="#schedule">📅 Schedule</a>
-        <a href="#daily-rollup">📊 Daily rollup</a>
-        <a href="#monthly-rollup">📊 Monthly rollup</a>
-        <a href="#session-history">🕒 Sessions</a>
-        <a href="#messages">✉️ Messages</a>
-        <a href="#settings">⚙️ Settings</a>
-        <a href="#operation">📈 Operation</a>
-        <a href="#seasons">🌱 Seasons</a>
-        <a href="#coverage">📍 Coverage</a>
+        <a href="@(pagePath + "#work-areas")">🗺️ Work areas</a>
+        <a href="@(pagePath + "#stay-out-zones")">🚫 Stay-out zones</a>
+        <a href="@(pagePath + "#schedule")">📅 Schedule</a>
+        <a href="@(pagePath + "#daily-rollup")">📊 Daily rollup</a>
+        <a href="@(pagePath + "#monthly-rollup")">📊 Monthly rollup</a>
+        <a href="@(pagePath + "#session-history")">🕒 Sessions</a>
+        <a href="@(pagePath + "#messages")">✉️ Messages</a>
+        <a href="@(pagePath + "#settings")">⚙️ Settings</a>
+        <a href="@(pagePath + "#operation")">📈 Operation</a>
+        <a href="@(pagePath + "#seasons")">🌱 Seasons</a>
+        <a href="@(pagePath + "#coverage")">📍 Coverage</a>
     </nav>
 
     <section id="work-areas">
