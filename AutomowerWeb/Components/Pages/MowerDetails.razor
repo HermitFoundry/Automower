@@ -422,8 +422,22 @@ else if (_detail is not null && _stored is not null)
     private MowerDisplay.CoveragePlot? _coveragePlot;
     private List<List<DailyStatisticsSnapshot>> _seasons = [];
 
-    protected override async Task OnInitializedAsync()
+    // OnParametersSetAsync, not OnInitializedAsync - navigating from one
+    // mower's details page to another (e.g. clicking a different mower in
+    // the top nav while already on /mower/{Name}) resolves to the same
+    // routable component type, just a new Name value, so Blazor reuses the
+    // existing component instance rather than constructing a fresh one.
+    // OnInitializedAsync only runs once per instance and would silently
+    // keep showing the previous mower's data - confirmed as the cause of a
+    // real bug (worked fine from the Dashboard, which *is* a different
+    // component and does get torn down/recreated, but did nothing when
+    // switching mowers directly from within this page). OnParametersSetAsync
+    // re-runs on every parameter change, including the first one, so it
+    // covers both cases without needing to detect "did Name actually change."
+    protected override async Task OnParametersSetAsync()
     {
+        _loading = true;
+        _error = null;
         try
         {
             _stored = await MowerService.ResolveExplicitMowerAsync(Name);
