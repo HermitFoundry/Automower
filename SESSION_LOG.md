@@ -6,6 +6,46 @@ replacement for `git log`. `SKILL.md`/`README.md`/`docs/` hold the durable
 reference material this work produced; this file is the story of how it
 got there. Newest entry on top.
 
+## 2026-07-31
+
+**Coverage map: chasing down AM430X NERA's current-position/transport-line
+gap, root-caused rather than just patched.** The user spotted the red dot
+sitting ~8.5m from where the black GOING_HOME line ended and, knowing
+their own yard, called it wrong ("the width of the lawn at that point is
+like 3-4m, not 8.5m"). Rather than guess, pulled the real stored GPS
+readings directly from `mower-AM430X-NERA.db` and did the actual math:
+
+- Per-step speed within the GOING_HOME trip itself topped out at 0.44 m/s
+  - well under the 1.5 m/s anomaly threshold already validated against
+  this account's mowing data (2026-07-29). No in-transit jump to trim.
+  Implemented the trim capability anyway (`CoverageService.
+  TrimAfterImplausibleJump`, same reused threshold) since it's real
+  protection for genuine future jumps, while being upfront that it
+  wouldn't change this specific case.
+- The real cause: AM430X's live GPS reading drifted ~8.5m over the ~57
+  minutes it sat motionless at the charger afterward - a few centimeters a
+  minute, far too slow for any per-step speed check to catch, since
+  nothing about it looks like a "jump."
+- The user's own explanation for *why*, once shown the numbers: Piteå is
+  far enough north that GPS satellites all sit low in the southern sky,
+  and close to a wall/building that blocks that sky - a real geometric
+  reason for this specific charger's reduced accuracy, not a data glitch.
+  Consistent with the AM405X house-wall multipath finding from 2026-07-22.
+
+Fixed properly with `CoverageService.GetStableChargerPosition`: while the
+mower is CHARGING/PARKED_IN_CS it isn't moving at all, so every GPS
+reading during that stretch is sampling the same real point - averaging
+them (after deduplicating, since the carry-forward-reconstructed poll
+history repeats each real reading across every unrelated event that fires
+while it's current, which would otherwise weight the average by incidental
+event frequency, not by genuinely distinct samples) gives a far more
+stable estimate than trusting whichever single reading happens to be
+freshest. Verified against the real data before shipping: moved the
+estimate to ~4.2m from the transport line's end, matching what the user
+expects from knowing the actual yard. Falls back to the live reading
+whenever the mower isn't at the charger, where averaging would lag behind
+genuine movement instead of stabilizing it.
+
 ## 2026-07-30
 
 **Coverage map: current-position dot and latest-transport-trip lines.**
