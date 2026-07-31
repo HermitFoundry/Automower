@@ -8,6 +8,33 @@ got there. Newest entry on top.
 
 ## 2026-07-30
 
+**Coverage map: current-position dot and latest-transport-trip lines.**
+Two more additions requested after the satellite-imagery revert: a red dot
+at the mower's current live position (reused the GPS fix already fetched
+for the Location/Weather rows, no extra API call), and a black line for
+the most recent LEAVING trip and the most recent GOING_HOME trip.
+`CoverageService.GetLatestTransportPaths` groups the poll history into
+contiguous same-activity runs the same way session-grouping already does
+elsewhere, but only keeps the *last* run per activity - each new trip
+replaces the previous line for that direction rather than accumulating,
+since drawing every past transit trip would just be clutter on top of the
+per-work-area dot clouds. `BuildCoveragePlot`'s bounding box now has to
+span all three layers, not just the mowing dots, since a transit line
+often reaches outside the lawn area itself (to the charging station).
+
+**A repo-visibility scare mid-deploy.** Redeploying this hit `git pull`
+failing on the QNAP `AutomowerWeb` container with "could not read Username
+for 'https://github.com'" - not a transient network blip, confirmed via
+the GitHub API returning 404 for anonymous access to the repo. The user
+had made the repo private earlier as planned; the QNAP containers pull
+over plain unauthenticated HTTPS, so this broke deploys on both of them,
+not just this one. Asked how to handle auth going forward (a scoped PAT,
+an SSH deploy key, or hands-off) rather than picking unilaterally, since
+it touches credential handling - the user made the repo public again
+instead, which unblocked the redeploy immediately. Still an open question
+for whenever the repo goes private for good: the QNAP containers will need
+real git credentials at that point.
+
 **Satellite imagery behind the coverage map - tried, tuned, reverted.**
 The user asked whether a satellite view could sit behind the coverage
 dots. Went with Esri's free, keyless World Imagery `/export` endpoint
