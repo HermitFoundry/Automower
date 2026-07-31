@@ -361,7 +361,41 @@ a { color: var(--brand); }
 
 .details-header h1 { margin: 0; }
 
+/* Jump-to-section links for the details page - it grew too long to just
+   scroll past every section looking for one. Sticky so it stays reachable
+   while scrolling through a long page, not just useful at the very top. */
+.detail-subnav {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    padding: 0.6rem;
+    margin: 0 0 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+}
+
+.detail-subnav a {
+    padding: 0.3rem 0.7rem;
+    border-radius: 999px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    text-decoration: none;
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
+.detail-subnav a:hover {
+    color: var(--brand);
+    border-color: var(--brand);
+}
+
 section {
+    scroll-margin-top: 4rem;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 12px;

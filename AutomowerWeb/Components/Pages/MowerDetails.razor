@@ -69,7 +69,21 @@ else if (_detail is not null && _stored is not null)
         }
     </dl>
 
-    <section>
+    <nav class="detail-subnav">
+        <a href="#work-areas">🗺️ Work areas</a>
+        <a href="#stay-out-zones">🚫 Stay-out zones</a>
+        <a href="#schedule">📅 Schedule</a>
+        <a href="#daily-rollup">📊 Daily rollup</a>
+        <a href="#monthly-rollup">📊 Monthly rollup</a>
+        <a href="#session-history">🕒 Sessions</a>
+        <a href="#messages">✉️ Messages</a>
+        <a href="#settings">⚙️ Settings</a>
+        <a href="#operation">📈 Operation</a>
+        <a href="#seasons">🌱 Seasons</a>
+        <a href="#coverage">📍 Coverage</a>
+    </nav>
+
+    <section id="work-areas">
         <h2>🗺️ Work areas</h2>
         @if ((a.WorkAreas ?? []).Length == 0)
         {
@@ -100,7 +114,7 @@ else if (_detail is not null && _stored is not null)
         }
     </section>
 
-    <section>
+    <section id="stay-out-zones">
         <h2>🚫 Stay-out zones</h2>
         @if (a.StayOutZones is null || a.StayOutZones.Zones.Length == 0)
         {
@@ -117,7 +131,7 @@ else if (_detail is not null && _stored is not null)
         }
     </section>
 
-    <section>
+    <section id="schedule">
         <h2>📅 Schedule</h2>
         @{
             var tasks = a.Calendar?.Tasks ?? [];
@@ -140,7 +154,7 @@ else if (_detail is not null && _stored is not null)
         }
     </section>
 
-    <section>
+    <section id="daily-rollup">
         <h2>📊 Daily rollup (last month)</h2>
         @if (_days.Count == 0)
         {
@@ -165,7 +179,7 @@ else if (_detail is not null && _stored is not null)
         }
     </section>
 
-    <section>
+    <section id="monthly-rollup">
         <h2>📊 Monthly rollup</h2>
         @if (_months.Count == 0)
         {
@@ -190,7 +204,7 @@ else if (_detail is not null && _stored is not null)
         }
     </section>
 
-    <section>
+    <section id="session-history">
         <h2>🕒 Session history (last 7 days)</h2>
         @if (_sessions.Count == 0)
         {
@@ -218,7 +232,7 @@ else if (_detail is not null && _stored is not null)
         }
     </section>
 
-    <section>
+    <section id="messages">
         <h2>✉️ Recent messages</h2>
         @if (_messages.Count == 0)
         {
@@ -235,7 +249,7 @@ else if (_detail is not null && _stored is not null)
         }
     </section>
 
-    <section>
+    <section id="settings">
         <h2>⚙️ Settings &amp; capabilities</h2>
         <dl class="mower-facts">
             <dt>Cutting height (dial)</dt>
@@ -259,7 +273,7 @@ else if (_detail is not null && _stored is not null)
         }
     </section>
 
-    <section>
+    <section id="operation">
         <h2>📈 Operation (lifetime)</h2>
         @if (a.Statistics is null)
         {
@@ -293,7 +307,7 @@ else if (_detail is not null && _stored is not null)
         }
     </section>
 
-    <section>
+    <section id="seasons">
         <h2>🌱 Seasons</h2>
         @if (_seasons.Count == 0)
         {
@@ -342,7 +356,7 @@ else if (_detail is not null && _stored is not null)
         }
     </section>
 
-    <section>
+    <section id="coverage">
         <h2>📍 Coverage (experimental)</h2>
         @if (_coveragePlot is null || _coveragePlot.Dots.Count == 0)
         {
